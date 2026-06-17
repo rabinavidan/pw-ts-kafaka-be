@@ -1,0 +1,251 @@
+name: CI - Backend API & Kafka Tests
+
+on:
+  push:
+    branches: [main, develop, 'feature/**', 'claude/**']
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 6 * * 1-5'
+
+env:
+  NODE_VERSION: '20'
+  KAFKA_BROKERS: localhost:9092
+  API_BASE_URL: http://localhost:3000
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Lint
+        run: npm run lint
+
+  test-api:
+    name: API Tests
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+
+    services:
+      mock-api:
+        image: mockserver/mockserver:latest
+        ports:
+          - 3000:1080
+        options: >-
+          --health-cmd "curl -f http://localhost:1080/mockserver/status || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run API tests
+        run: npm run test:api
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          API_KEY: ${{ secrets.API_KEY }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: api-test-results
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+
+  test-kafka:
+    name: Kafka Tests
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+
+    services:
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.6.0
+        ports:
+          - 2181:2181
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+
+      kafka:
+        image: confluentinc/cp-kafka:7.6.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+          KAFKA_MESSAGE_MAX_BYTES: 1048576
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Create Kafka topics
+        run: |
+          docker run --network host confluentinc/cp-kafka:7.6.0 \
+            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
+            --topic orders --partitions 3 --replication-factor 1
+          docker run --network host confluentinc/cp-kafka:7.6.0 \
+            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
+            --topic payments --partitions 3 --replication-factor 1
+          docker run --network host confluentinc/cp-kafka:7.6.0 \
+            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
+            --topic notifications --partitions 1 --replication-factor 1
+          docker run --network host confluentinc/cp-kafka:7.6.0 \
+            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
+            --topic dead-letter-queue --partitions 1 --replication-factor 1
+          docker run --network host confluentinc/cp-kafka:7.6.0 \
+            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
+            --topic audit-events --partitions 2 --replication-factor 1
+
+      - name: Run Kafka tests
+        run: npm run test:kafka
+        env:
+          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+          KAFKA_CLIENT_ID: playwright-ci-client
+          KAFKA_GROUP_ID: playwright-ci-group
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kafka-test-results
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test-api, test-kafka]
+
+    services:
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.6.0
+        ports:
+          - 2181:2181
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+
+      kafka:
+        image: confluentinc/cp-kafka:7.6.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 10
+
+      mock-api:
+        image: mockserver/mockserver:latest
+        ports:
+          - 3000:1080
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          API_BASE_URL: ${{ env.API_BASE_URL }}
+          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 14
+
+  publish-report:
+    name: Publish Test Report
+    runs-on: ubuntu-latest
+    needs: [test-api, test-kafka, test-integration]
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results/
+
+      - name: Display test summary
+        run: |
+          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| API Tests | ${{ needs.test-api.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Kafka Tests | ${{ needs.test-kafka.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.test-integration.result }} |" >> $GITHUB_STEP_SUMMARY
