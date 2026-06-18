@@ -1,12 +1,13 @@
-name: CI - Backend API & Kafka Tests
+name: CI / CD
 
 on:
   push:
-    branches: [main, develop, 'feature/**', 'claude/**']
+    branches: [main]
   pull_request:
-    branches: [main, develop]
-  schedule:
-    - cron: '0 6 * * 1-5'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NODE_VERSION: '20'
@@ -14,78 +15,49 @@ env:
   API_BASE_URL: http://localhost:3000
 
 jobs:
-  lint-and-typecheck:
-    name: Lint & Type Check
+  # ── 1. Lint & type-check ─────────────────────────────────────────
+  lint:
+    name: Lint & Type-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run type-check
 
-      - name: Type check
-        run: npm run type-check
-
-      - name: Lint
-        run: npm run lint
-
-  test-api:
-    name: API Tests
+  # ── 2. UI build ──────────────────────────────────────────────────
+  ui-build:
+    name: UI Build
     runs-on: ubuntu-latest
-    needs: lint-and-typecheck
-
-    services:
-      mock-api:
-        image: mockserver/mockserver:latest
-        ports:
-          - 3000:1080
-        options: >-
-          --health-cmd "curl -f http://localhost:1080/mockserver/status || exit 1"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
+      - run: npm run ui:install
+      - run: npm run ui:build
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run API tests
-        run: npm run test:api
-        env:
-          API_BASE_URL: ${{ env.API_BASE_URL }}
-          API_KEY: ${{ secrets.API_KEY }}
-
-      - name: Upload test results
-        uses: actions/upload-artifact@v4
-        if: always()
+      - uses: actions/upload-artifact@v4
         with:
-          name: api-test-results
-          path: |
-            test-results/
-            playwright-report/
-          retention-days: 14
+          name: ui-dist
+          path: ui/dist/
+          retention-days: 7
 
-  test-kafka:
-    name: Kafka Tests
+  # ── 3. Backend tests (API + Kafka + Integration) ─────────────────
+  test-be:
+    name: Backend Tests
     runs-on: ubuntu-latest
-    needs: lint-and-typecheck
+    needs: lint
 
     services:
       zookeeper:
@@ -95,6 +67,11 @@ jobs:
         env:
           ZOOKEEPER_CLIENT_PORT: 2181
           ZOOKEEPER_TICK_TIME: 2000
+        options: >-
+          --health-cmd "nc -z localhost 2181"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
 
       kafka:
         image: confluentinc/cp-kafka:7.6.0
@@ -106,18 +83,18 @@ jobs:
           KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
           KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
           KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
-          KAFKA_MESSAGE_MAX_BYTES: 1048576
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
         options: >-
           --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
           --health-interval 10s
           --health-timeout 10s
-          --health-retries 10
+          --health-retries 15
+          --health-start-period 30s
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -130,122 +107,140 @@ jobs:
 
       - name: Create Kafka topics
         run: |
-          docker run --network host confluentinc/cp-kafka:7.6.0 \
-            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
-            --topic orders --partitions 3 --replication-factor 1
-          docker run --network host confluentinc/cp-kafka:7.6.0 \
-            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
-            --topic payments --partitions 3 --replication-factor 1
-          docker run --network host confluentinc/cp-kafka:7.6.0 \
-            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
-            --topic notifications --partitions 1 --replication-factor 1
-          docker run --network host confluentinc/cp-kafka:7.6.0 \
-            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
-            --topic dead-letter-queue --partitions 1 --replication-factor 1
-          docker run --network host confluentinc/cp-kafka:7.6.0 \
-            kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists \
-            --topic audit-events --partitions 2 --replication-factor 1
+          for topic in orders payments notifications dead-letter-queue audit-events; do
+            docker run --rm --network host confluentinc/cp-kafka:7.6.0 \
+              kafka-topics --bootstrap-server localhost:9092 \
+              --create --if-not-exists --topic $topic \
+              --partitions 3 --replication-factor 1
+          done
 
-      - name: Run Kafka tests
-        run: npm run test:kafka
+      - name: Run backend tests
+        run: npm test
         env:
+          CI: true
           KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
-          KAFKA_CLIENT_ID: playwright-ci-client
-          KAFKA_GROUP_ID: playwright-ci-group
+          API_BASE_URL: ${{ env.API_BASE_URL }}
 
-      - name: Upload test results
+      - name: Generate HTML report
+        if: always()
+        run: node generate-report.js
+
+      - name: Write job summary
+        if: always()
+        run: node generate-summary.js test-results/results.json >> $GITHUB_STEP_SUMMARY
+        env:
+          SUMMARY_LABEL: Backend Tests — API · Kafka · Integration
+
+      - name: Upload Playwright HTML report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: kafka-test-results
-          path: |
-            test-results/
-            playwright-report/
-          retention-days: 14
+          name: be-playwright-report
+          path: playwright-report/
+          retention-days: 30
 
-  test-integration:
-    name: Integration Tests
+      - name: Upload pretty HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: be-test-report-html
+          path: test-report.html
+          retention-days: 30
+
+      - name: Upload results JSON
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: be-results-json
+          path: test-results/results.json
+          retention-days: 30
+
+  # ── 4. E2E tests (UI — Orders & Payments) ────────────────────────
+  test-e2e:
+    name: E2E Tests (UI)
     runs-on: ubuntu-latest
-    needs: [test-api, test-kafka]
-
-    services:
-      zookeeper:
-        image: confluentinc/cp-zookeeper:7.6.0
-        ports:
-          - 2181:2181
-        env:
-          ZOOKEEPER_CLIENT_PORT: 2181
-          ZOOKEEPER_TICK_TIME: 2000
-
-      kafka:
-        image: confluentinc/cp-kafka:7.6.0
-        ports:
-          - 9092:9092
-        env:
-          KAFKA_BROKER_ID: 1
-          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-          KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
-        options: >-
-          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
-          --health-interval 10s
-          --health-timeout 10s
-          --health-retries 10
-
-      mock-api:
-        image: mockserver/mockserver:latest
-        ports:
-          - 3000:1080
+    needs: [lint, ui-build]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
+      - name: Install root dependencies
         run: npm ci
+
+      - name: Install UI dependencies
+        run: npm run ui:install
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run integration tests
-        run: npm run test:integration
+      - name: Run E2E tests
+        run: npm run test:e2e
         env:
-          API_BASE_URL: ${{ env.API_BASE_URL }}
-          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+          CI: true
 
-      - name: Upload test results
+      - name: Write job summary
+        if: always()
+        run: node generate-summary.js test-results/ui-results.json >> $GITHUB_STEP_SUMMARY
+        env:
+          SUMMARY_LABEL: E2E Tests — Orders & Payments
+
+      - name: Upload E2E Playwright report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: integration-test-results
-          path: |
-            test-results/
-            playwright-report/
-          retention-days: 14
+          name: e2e-playwright-report
+          path: playwright-report-ui/
+          retention-days: 30
 
-  publish-report:
-    name: Publish Test Report
+      - name: Upload E2E results JSON
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results-json
+          path: test-results/ui-results.json
+          retention-days: 30
+
+  # ── 5. Deploy to GitHub Pages (main only) ────────────────────────
+  deploy:
+    name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [test-api, test-kafka, test-integration]
-    if: always()
+    needs: [test-be, test-e2e, ui-build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
-      - name: Download all artifacts
+      - name: Download UI dist
         uses: actions/download-artifact@v4
         with:
-          path: all-results/
+          name: ui-dist
+          path: dist/
 
-      - name: Display test summary
-        run: |
-          echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Suite | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| API Tests | ${{ needs.test-api.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Kafka Tests | ${{ needs.test-kafka.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration Tests | ${{ needs.test-integration.result }} |" >> $GITHUB_STEP_SUMMARY
+      - name: Download BE HTML report
+        uses: actions/download-artifact@v4
+        with:
+          name: be-test-report-html
+          path: dist/reports/
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

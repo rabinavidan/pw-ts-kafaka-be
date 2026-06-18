@@ -12,6 +12,14 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 15_000 },
 
+  webServer: {
+    command: 'node mock-server.js',
+    port: 3000,
+    reuseExistingServer: true,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  },
+
   reporter: [
     ['list'],
     ['html', { outputFolder: 'playwright-report', open: 'never' }],

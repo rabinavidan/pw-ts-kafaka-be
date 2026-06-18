@@ -1,0 +1,962 @@
+  <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>pw-ts-kafka-be · Data Flow</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d1117;--surface:#161b22;--surface2:#21262d;--border:#30363d;
+  --accent:#58a6ff;--green:#3fb950;--orange:#f0883e;--purple:#bc8cff;
+  --red:#f85149;--yellow:#e3b341;--cyan:#39d353;--text:#e6edf3;--muted:#8b949e;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+
+/* ── Header ── */
+header{text-align:center;padding:48px 20px 32px;position:relative;overflow:hidden}
+header::before{content:"";position:absolute;inset:0;
+  background:radial-gradient(ellipse 80% 60% at 50% 0%,rgba(88,166,255,.12),transparent);pointer-events:none}
+header h1{font-size:2rem;font-weight:700;letter-spacing:-0.5px}
+header h1 span{color:var(--accent)}
+header p{color:var(--muted);margin-top:8px;font-size:.95rem}
+
+/* ── Tabs ── */
+.tabs{display:flex;justify-content:center;gap:8px;padding:0 20px 32px;flex-wrap:wrap}
+.tab{padding:8px 20px;border-radius:20px;border:1px solid var(--border);background:var(--surface);
+  color:var(--muted);cursor:pointer;font-size:.83rem;font-weight:600;transition:all .2s;user-select:none}
+.tab:hover{border-color:var(--accent);color:var(--accent)}
+.tab.active{background:var(--accent);border-color:var(--accent);color:#0d1117}
+
+/* ── Panels ── */
+.panel{display:none;padding:0 20px 80px;max-width:1100px;margin:0 auto;animation:fadeIn .35s ease}
+.panel.active{display:block}
+@keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Section titles ── */
+.section-title{font-size:1.3rem;font-weight:700;margin-bottom:6px}
+.section-sub{color:var(--muted);font-size:.875rem;margin-bottom:32px}
+
+/* ══════════════════════════════════════
+   FLOW CANVAS
+══════════════════════════════════════ */
+.flow-wrap{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+  padding:40px 32px;position:relative;overflow:hidden;margin-bottom:24px}
+
+/* nodes */
+.node{position:absolute;display:flex;flex-direction:column;align-items:center;gap:6px;
+  transform:translate(-50%,-50%);z-index:2}
+.node-box{background:var(--surface2);border:2px solid var(--border);border-radius:12px;
+  padding:10px 16px;font-size:.75rem;font-weight:700;text-align:center;min-width:100px;
+  transition:all .3s;cursor:default}
+.node-box:hover{transform:scale(1.05)}
+.node-icon{font-size:1.4rem;margin-bottom:2px}
+.node-label{font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+
+/* colour variants */
+.nb-blue  {border-color:var(--accent);  color:var(--accent);  background:rgba(88,166,255,.08)}
+.nb-green {border-color:var(--green);   color:var(--green);   background:rgba(63,185,80,.08)}
+.nb-orange{border-color:var(--orange);  color:var(--orange);  background:rgba(240,136,62,.08)}
+.nb-purple{border-color:var(--purple);  color:var(--purple);  background:rgba(188,140,255,.08)}
+.nb-red   {border-color:var(--red);     color:var(--red);     background:rgba(248,81,73,.08)}
+.nb-yellow{border-color:var(--yellow);  color:var(--yellow);  background:rgba(227,179,65,.08)}
+.nb-cyan  {border-color:var(--cyan);    color:var(--cyan);    background:rgba(57,211,83,.08)}
+
+/* SVG canvas for arrows */
+.flow-svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+
+/* animated packet */
+.packet{position:absolute;width:12px;height:12px;border-radius:50%;z-index:3;
+  box-shadow:0 0 8px currentColor;pointer-events:none}
+
+/* static canvas container */
+.canvas{position:relative;width:100%}
+
+/* ── Legend row ── */
+.legend-row{display:flex;flex-wrap:wrap;gap:16px;margin-top:16px}
+.leg{display:flex;align-items:center;gap:6px;font-size:.75rem;color:var(--muted)}
+.leg-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.leg-line{width:24px;height:3px;border-radius:2px;flex-shrink:0}
+
+/* ── Step list ── */
+.steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:20px}
+.step{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.step-num{font-size:.65rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}
+.step-title{font-size:.85rem;font-weight:700;margin-bottom:4px}
+.step-desc{font-size:.75rem;color:var(--muted);line-height:1.5}
+code{font-family:"SFMono-Regular",Consolas,monospace;font-size:.85em;
+  background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px}
+
+/* ── Kafka partition diagram ── */
+.partition-wrap{display:flex;gap:16px;margin-top:20px;flex-wrap:wrap}
+.partition{flex:1;min-width:140px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:10px;overflow:hidden}
+.part-header{padding:8px 12px;font-size:.7rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.8px;background:rgba(255,255,255,.04);border-bottom:1px solid var(--border)}
+.part-messages{padding:8px}
+.msg-row{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;
+  font-size:.7rem;font-family:"SFMono-Regular",Consolas,monospace;margin-bottom:4px;
+  background:rgba(255,255,255,.03);border:1px solid transparent;animation:msgAppear .4s ease both}
+.msg-row .offset{color:var(--muted);min-width:28px}
+@keyframes msgAppear{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
+
+/* ── Message flow timeline ── */
+.timeline-flow{position:relative;padding-left:28px;margin-top:20px}
+.timeline-flow::before{content:"";position:absolute;left:9px;top:0;bottom:0;
+  width:2px;background:linear-gradient(to bottom,var(--accent),var(--purple),var(--green))}
+.tf-row{position:relative;margin-bottom:20px}
+.tf-dot{position:absolute;left:-28px;top:4px;width:12px;height:12px;border-radius:50%;border:2px solid}
+.tf-time{font-size:.65rem;color:var(--muted);margin-bottom:2px;font-family:"SFMono-Regular",Consolas,monospace}
+.tf-title{font-size:.82rem;font-weight:700;margin-bottom:2px}
+.tf-desc{font-size:.75rem;color:var(--muted);line-height:1.5}
+.tf-badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:.65rem;
+  font-weight:700;border:1px solid;margin-top:4px}
+
+/* ── CI pipeline ── */
+.ci-pipe{display:flex;align-items:center;gap:0;flex-wrap:wrap;margin-top:20px}
+.ci-stage{background:var(--surface2);border:1px solid var(--border);border-radius:10px;
+  padding:12px 16px;min-width:130px;text-align:center;position:relative}
+.ci-stage .ci-icon{font-size:1.3rem;margin-bottom:4px}
+.ci-stage .ci-name{font-size:.75rem;font-weight:700}
+.ci-stage .ci-detail{font-size:.65rem;color:var(--muted);margin-top:3px}
+.ci-arrow{font-size:1.4rem;color:var(--muted);padding:0 6px;flex-shrink:0}
+.ci-fork{display:flex;flex-direction:column;gap:8px}
+.ci-parallel{display:flex;gap:8px;align-items:center}
+
+/* ── mock-server internals ── */
+.ms-stores{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+.ms-store{padding:5px 13px;border-radius:20px;font-size:.74rem;font-weight:600;
+  border:1px solid;display:inline-flex;align-items:center;gap:5px}
+.ep-group{background:var(--surface);border:1px solid var(--border);border-radius:10px;
+  overflow:hidden;margin-bottom:10px}
+.ep-group-title{padding:7px 14px;font-size:.68rem;font-weight:700;text-transform:uppercase;
+  letter-spacing:.8px;color:var(--muted);background:var(--surface2);border-bottom:1px solid var(--border)}
+.ep-row{display:flex;align-items:baseline;gap:10px;padding:7px 14px;
+  border-bottom:1px solid rgba(48,54,61,.6);font-size:.75rem;flex-wrap:wrap}
+.ep-row:last-child{border-bottom:none}
+.mbadge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:.63rem;
+  font-weight:700;letter-spacing:.4px;flex-shrink:0;font-family:"SFMono-Regular",Consolas,monospace}
+.mbadge.get {background:rgba(88,166,255,.12);color:var(--accent);border:1px solid rgba(88,166,255,.4)}
+.mbadge.post{background:rgba(63,185,80,.12); color:var(--green); border:1px solid rgba(63,185,80,.4)}
+.mbadge.put {background:rgba(240,136,62,.12);color:var(--orange);border:1px solid rgba(240,136,62,.4)}
+.ep-path{font-family:"SFMono-Regular",Consolas,monospace;font-size:.73rem;
+  color:var(--text);min-width:200px;flex-shrink:0}
+.ep-resp{color:var(--muted);font-size:.71rem;flex:1;min-width:150px}
+.ep-pub{font-size:.71rem;white-space:nowrap}
+.ep-pub-none{color:var(--border);font-size:.71rem}
+
+/* ── Responsive canvas heights ── */
+.h300{height:300px} .h360{height:360px} .h420{height:420px} .h480{height:480px}
+
+@media(max-width:600px){
+  .h300,.h360,.h420,.h480{height:auto;padding-bottom:60%}
+  .ci-pipe{flex-direction:column;align-items:flex-start}
+  .ci-arrow{transform:rotate(90deg)}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span>pw-ts-kafka-be</span> · Data Flow</h1>
+  <p>Animated walkthrough of every data path in the framework</p>
+</header>
+
+<!-- ══ TABS ══ -->
+<div class="tabs">
+  <div class="tab active"  onclick="show('api')">① API Flow</div>
+  <div class="tab"         onclick="show('kafka')">② Kafka Flow</div>
+  <div class="tab"         onclick="show('integration')">③ Integration Flow</div>
+  <div class="tab"         onclick="show('ci')">④ CI Pipeline</div>
+</div>
+
+<!-- ═══════════════════════════════════
+  PANEL 1 · API FLOW
+═══════════════════════════════════ -->
+<div class="panel active" id="panel-api">
+  <div class="section-title">REST API Test Flow</div>
+  <div class="section-sub">How an API test travels from spec file to assertion</div>
+
+  <div class="flow-wrap">
+    <div class="canvas h420" id="api-canvas">
+      <svg class="flow-svg" id="api-svg"></svg>
+    </div>
+    <div class="legend-row">
+      <div class="leg"><div class="leg-line" style="background:var(--accent)"></div>HTTP Request</div>
+      <div class="leg"><div class="leg-line" style="background:var(--green)"></div>HTTP Response</div>
+      <div class="leg"><div class="leg-line" style="background:var(--purple)"></div>Assertion</div>
+      <div class="leg" style="margin-left:auto;font-size:.72rem;color:var(--green);cursor:pointer"
+           onclick="document.getElementById('ms-detail').scrollIntoView({behavior:'smooth'})">
+        🖥️ <u>see mock-server internals ↓</u>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ mock-server.js zoom-in — directly below canvas ══ -->
+  <div id="ms-detail" style="border:1px solid var(--green);border-radius:14px;padding:22px 24px;
+       margin:20px 0 28px;background:rgba(63,185,80,.04);position:relative">
+
+    <!-- header bar -->
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <span style="font-size:1.25rem">🖥️</span>
+      <span style="font-size:1rem;font-weight:700;color:var(--green)">mock-server.js</span>
+      <span style="font-size:.75rem;color:var(--muted)">· port 3000 · in-memory · stateful</span>
+      <span style="margin-left:auto;font-size:.65rem;background:rgba(63,185,80,.15);color:var(--green);
+             border:1px solid rgba(63,185,80,.4);padding:2px 9px;border-radius:10px;font-weight:700;
+             letter-spacing:.5px">ZOOM IN</span>
+    </div>
+
+    <!-- ── Boot sequence ── -->
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.8px;
+         color:var(--muted);margin-bottom:8px;margin-top:4px">Boot Sequence</div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:20px">
+      <div style="padding:5px 12px;border-radius:8px;border:1px solid var(--yellow);
+           color:var(--yellow);background:rgba(227,179,65,.08);font-size:.73rem;font-weight:700">
+        ⚡ node mock-server.js
+      </div>
+      <span style="color:var(--muted)">→</span>
+      <div style="padding:5px 12px;border-radius:8px;border:1px solid var(--orange);
+           color:var(--orange);background:rgba(240,136,62,.08);font-size:.73rem;font-weight:700">
+        KafkaJS producer.connect()
+      </div>
+      <span style="color:var(--muted)">→</span>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:.65rem;color:var(--green);white-space:nowrap">✓ success</span>
+          <div style="padding:3px 10px;border-radius:6px;border:1px solid var(--green);
+               color:var(--green);background:rgba(63,185,80,.08);font-size:.7rem">
+            producerReady = <code>true</code>
+          </div>
+          <span style="color:var(--muted)">→</span>
+          <div style="padding:3px 10px;border-radius:6px;border:1px solid var(--accent);
+               color:var(--accent);background:rgba(88,166,255,.08);font-size:.7rem;font-weight:700">
+            server.listen(3000) ✓
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:.65rem;color:var(--red);white-space:nowrap">✗ unavailable</span>
+          <div style="padding:3px 10px;border-radius:6px;border:1px solid var(--red);
+               color:var(--red);background:rgba(248,81,73,.08);font-size:.7rem">
+            warn · no Kafka events
+          </div>
+          <span style="color:var(--muted)">→</span>
+          <div style="padding:3px 10px;border-radius:6px;border:1px solid var(--accent);
+               color:var(--accent);background:rgba(88,166,255,.08);font-size:.7rem;font-weight:700">
+            server.listen(3000) ✓
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Per-request lifecycle ── -->
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.8px;
+         color:var(--muted);margin-bottom:8px">Per-Request Lifecycle</div>
+    <div style="display:flex;gap:0;align-items:stretch;flex-wrap:wrap;margin-bottom:20px;
+         background:var(--surface2);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div style="flex:1;min-width:100px;padding:10px 12px;border-right:1px solid var(--border)">
+        <div style="font-size:.6rem;font-weight:800;color:var(--accent);letter-spacing:.5px;margin-bottom:4px">① HTTP IN</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text);margin-bottom:3px">Receive</div>
+        <div style="font-size:.67rem;color:var(--muted);line-height:1.45"><code>http.createServer</code><br>streams req chunks</div>
+      </div>
+      <div style="flex:1;min-width:100px;padding:10px 12px;border-right:1px solid var(--border)">
+        <div style="font-size:.6rem;font-weight:800;color:var(--accent);letter-spacing:.5px;margin-bottom:4px">② ROUTE</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text);margin-bottom:3px">Router</div>
+        <div style="font-size:.67rem;color:var(--muted);line-height:1.45">Regex match on<br><code>method + path</code></div>
+      </div>
+      <div style="flex:1;min-width:100px;padding:10px 12px;border-right:1px solid var(--border)">
+        <div style="font-size:.6rem;font-weight:800;color:var(--accent);letter-spacing:.5px;margin-bottom:4px">③ BODY</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text);margin-bottom:3px">readBody()</div>
+        <div style="font-size:.67rem;color:var(--muted);line-height:1.45">Chunks → JSON<br>silent <code>{}</code> on error</div>
+      </div>
+      <div style="flex:1;min-width:100px;padding:10px 12px;border-right:1px solid var(--border)">
+        <div style="font-size:.6rem;font-weight:800;color:var(--yellow);letter-spacing:.5px;margin-bottom:4px">④ VALIDATE</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text);margin-bottom:3px">Guard clauses</div>
+        <div style="font-size:.67rem;color:var(--muted);line-height:1.45">Missing fields →<br><code>422 VALIDATION_ERROR</code></div>
+      </div>
+      <div style="flex:1;min-width:100px;padding:10px 12px;border-right:1px solid var(--border)">
+        <div style="font-size:.6rem;font-weight:800;color:var(--orange);letter-spacing:.5px;margin-bottom:4px">⑤ STORE</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text);margin-bottom:3px">Mutate Map</div>
+        <div style="font-size:.67rem;color:var(--muted);line-height:1.45">Insert / update<br>in-memory Map</div>
+      </div>
+      <div style="flex:1;min-width:100px;padding:10px 12px;border-right:1px solid var(--border)">
+        <div style="font-size:.6rem;font-weight:800;color:var(--green);letter-spacing:.5px;margin-bottom:4px">⑥ RESPOND</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text);margin-bottom:3px">send()</div>
+        <div style="font-size:.67rem;color:var(--muted);line-height:1.45">JSON + status code<br>sync · no await</div>
+      </div>
+      <div style="flex:1;min-width:100px;padding:10px 12px">
+        <div style="font-size:.6rem;font-weight:800;color:var(--purple);letter-spacing:.5px;margin-bottom:4px">⑦ PUBLISH</div>
+        <div style="font-size:.72rem;font-weight:700;color:var(--text);margin-bottom:3px">publish() async</div>
+        <div style="font-size:.67rem;color:var(--muted);line-height:1.45">fire-and-forget<br>non-blocking</div>
+      </div>
+    </div>
+
+    <!-- ── publish() internals ── -->
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.8px;
+         color:var(--muted);margin-bottom:8px">publish() internals</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">
+      <div style="flex:1;min-width:200px;background:var(--surface2);border:1px solid var(--cyan);
+           border-radius:8px;padding:12px 14px">
+        <div style="font-size:.7rem;font-weight:700;color:var(--cyan);margin-bottom:6px">Always (no Kafka needed)</div>
+        <div style="font-size:.71rem;color:var(--muted);line-height:1.6">
+          Push to <code>eventLog[]</code> (capped 200)<br>
+          Served by <code>GET /api/v1/events</code> → UI feed
+        </div>
+      </div>
+      <div style="flex:1;min-width:200px;background:var(--surface2);border:1px solid var(--orange);
+           border-radius:8px;padding:12px 14px">
+        <div style="font-size:.7rem;font-weight:700;color:var(--orange);margin-bottom:6px">If producerReady = true</div>
+        <div style="font-size:.71rem;color:var(--muted);line-height:1.6">
+          <code>producer.send({ topic, messages: [{ key, value, headers }] })</code><br>
+          <code>headers['event-type']</code> identifies event kind
+        </div>
+      </div>
+      <div style="flex:1;min-width:200px;background:var(--surface2);border:1px solid var(--red);
+           border-radius:8px;padding:12px 14px">
+        <div style="font-size:.7rem;font-weight:700;color:var(--red);margin-bottom:6px">On Kafka error</div>
+        <div style="font-size:.71rem;color:var(--muted);line-height:1.6">
+          Console warn only — HTTP response already sent.<br>
+          Test does not fail; DLQ path tested separately.
+        </div>
+      </div>
+    </div>
+
+    <!-- in-memory stores -->
+    <div style="font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.8px;
+         color:var(--muted);margin-bottom:8px">In-memory stores (reset on restart)</div>
+    <div class="ms-stores" style="margin-bottom:20px">
+      <span class="ms-store nb-blue">📋 <code>orders</code> Map</span>
+      <span class="ms-store nb-orange">💳 <code>payments</code> Map</span>
+      <span class="ms-store nb-yellow">🔗 <code>orderPayments</code> Map</span>
+      <span class="ms-store nb-cyan">📡 <code>eventLog[]</code> last 200</span>
+    </div>
+
+    <!-- column headers -->
+    <div style="display:flex;gap:10px;padding:0 14px 6px;font-size:.63rem;font-weight:700;
+         text-transform:uppercase;letter-spacing:.7px;color:var(--muted)">
+      <span style="width:48px;flex-shrink:0">Method</span>
+      <span style="min-width:200px;flex-shrink:0">Path</span>
+      <span style="flex:1">HTTP Response</span>
+      <span style="min-width:220px;flex-shrink:0">Publishes to Kafka</span>
+    </div>
+
+    <!-- Health & Events -->
+    <div class="ep-group">
+      <div class="ep-group-title">Health &amp; Events</div>
+      <div class="ep-row">
+        <span class="mbadge get">GET</span>
+        <span class="ep-path">/health</span>
+        <span class="ep-resp">200 · <code>{ status, version, uptime, dependencies[] }</code></span>
+        <span class="ep-pub-none" style="min-width:220px">—</span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge get">GET</span>
+        <span class="ep-path">/ready</span>
+        <span class="ep-resp">200 · <code>{ status: "ready" }</code></span>
+        <span class="ep-pub-none" style="min-width:220px">—</span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge get">GET</span>
+        <span class="ep-path">/api/v1/events</span>
+        <span class="ep-resp">200 · <code>{ events[] }</code> <span style="color:var(--cyan);font-size:.68rem">← reads eventLog</span></span>
+        <span class="ep-pub-none" style="min-width:220px">—</span>
+      </div>
+    </div>
+
+    <!-- Orders -->
+    <div class="ep-group">
+      <div class="ep-group-title">Orders</div>
+      <div class="ep-row">
+        <span class="mbadge post">POST</span>
+        <span class="ep-path">/api/v1/orders</span>
+        <span class="ep-resp">201 Order &nbsp;·&nbsp; 422 validation</span>
+        <span class="ep-pub" style="color:var(--orange);min-width:220px">orders → <code>order.created</code></span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge get">GET</span>
+        <span class="ep-path">/api/v1/orders</span>
+        <span class="ep-resp">200 · <code>{ items[], total, page, pageSize, hasNext }</code>
+          <span style="font-size:.67rem;color:var(--muted)">?status &amp; pagination</span></span>
+        <span class="ep-pub-none" style="min-width:220px">—</span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge get">GET</span>
+        <span class="ep-path">/api/v1/orders/:id</span>
+        <span class="ep-resp">200 Order &nbsp;·&nbsp; 404</span>
+        <span class="ep-pub-none" style="min-width:220px">—</span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge put">PUT</span>
+        <span class="ep-path">/api/v1/orders/:id/confirm</span>
+        <span class="ep-resp">200 Order &nbsp;·&nbsp; 404</span>
+        <span class="ep-pub" style="color:var(--orange);min-width:220px">orders → <code>order.confirmed</code></span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge put">PUT</span>
+        <span class="ep-path">/api/v1/orders/:id/cancel</span>
+        <span class="ep-resp">200 Order &nbsp;·&nbsp; 404</span>
+        <span class="ep-pub" style="color:var(--orange);min-width:220px">orders → <code>order.cancelled</code></span>
+      </div>
+    </div>
+
+    <!-- Payments -->
+    <div class="ep-group">
+      <div class="ep-group-title">Payments</div>
+      <div class="ep-row">
+        <span class="mbadge post">POST</span>
+        <span class="ep-path">/api/v1/payments</span>
+        <span class="ep-resp">201 Payment &nbsp;·&nbsp; 409 conflict &nbsp;·&nbsp; 422 validation</span>
+        <span class="ep-pub" style="min-width:220px;line-height:1.8">
+          <span style="color:var(--green)">payments → <code>payment.initiated</code></span><br>
+          <span style="color:var(--red)">dead-letter-queue → <code>payment.failed</code>
+            <span style="font-size:.66rem;opacity:.75"> (simulateFailure)</span></span>
+        </span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge get">GET</span>
+        <span class="ep-path">/api/v1/payments/:id</span>
+        <span class="ep-resp">200 Payment &nbsp;·&nbsp; 404</span>
+        <span class="ep-pub-none" style="min-width:220px">—</span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge put">PUT</span>
+        <span class="ep-path">/api/v1/payments/:id/process</span>
+        <span class="ep-resp">200 Payment &nbsp;·&nbsp; 404</span>
+        <span class="ep-pub" style="color:var(--green);min-width:220px">payments → <code>payment.processed</code></span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge put">PUT</span>
+        <span class="ep-path">/api/v1/payments/:id/refund</span>
+        <span class="ep-resp">200 Payment &nbsp;·&nbsp; 404</span>
+        <span class="ep-pub" style="color:var(--green);min-width:220px">payments → <code>payment.refunded</code></span>
+      </div>
+      <div class="ep-row">
+        <span class="mbadge put">PUT</span>
+        <span class="ep-path">/api/v1/payments/:id/fail</span>
+        <span class="ep-resp">200 Payment &nbsp;·&nbsp; 404</span>
+        <span class="ep-pub" style="color:var(--red);min-width:220px">dead-letter-queue → <code>payment.failed</code></span>
+      </div>
+    </div>
+  </div><!-- /ms-detail -->
+
+  <!-- step cards -->
+  <div class="steps">
+    <div class="step">
+      <div class="step-num" style="color:var(--accent)">Step 01</div>
+      <div class="step-title">Fixture Setup</div>
+      <div class="step-desc">Playwright injects a fresh <code>ApiHelper</code> per test via <code>src/fixtures/index.ts</code>. Base URL and auth headers are read from <code>src/config/api.config.ts</code>.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--accent)">Step 02</div>
+      <div class="step-title">Data Factory</div>
+      <div class="step-desc"><code>src/utils/data.factory.ts</code> builds randomised request payloads so each run is independent. The factory feeds directly into <code>ApiHelper</code>.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--accent)">Step 03</div>
+      <div class="step-title">HTTP Request →</div>
+      <div class="step-desc"><code>ApiHelper</code> sends the request to <strong>mock-server.js :3000</strong> locally (or a real backend in CI). Retry logic and Winston logging wrap every call.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--green)">Step 04</div>
+      <div class="step-title">← HTTP Response</div>
+      <div class="step-desc"><strong>mock-server.js</strong> returns JSON + status. The response travels back to <code>ApiHelper</code>, which records timing and surfaces it to the test.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--orange)">Step 05</div>
+      <div class="step-title">Response Typing</div>
+      <div class="step-desc">Raw JSON is cast to typed interfaces from <code>src/models/api.model.ts</code> — TypeScript flags contract drift at compile time, not at runtime.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--purple)">Step 06</div>
+      <div class="step-title">Assertion + Teardown</div>
+      <div class="step-desc">Helpers in <code>src/utils/assertion.ts</code> validate status, body shape, and SLA timing. Fixture <code>afterEach</code> flushes logs — no state leaks between tests.</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════════════════════
+  PANEL 2 · KAFKA FLOW
+═══════════════════════════════════ -->
+<div class="panel" id="panel-kafka">
+  <div class="section-title">Kafka Producer → Broker → Consumer Flow</div>
+  <div class="section-sub">How messages travel from test to topic and back</div>
+
+  <div class="flow-wrap">
+    <div class="canvas h420" id="kafka-canvas">
+      <svg class="flow-svg" id="kafka-svg"></svg>
+    </div>
+    <div class="legend-row">
+      <div class="leg"><div class="leg-line" style="background:var(--orange)"></div>Produce</div>
+      <div class="leg"><div class="leg-line" style="background:var(--green)"></div>Consume</div>
+      <div class="leg"><div class="leg-line" style="background:var(--red)"></div>Dead-Letter</div>
+    </div>
+  </div>
+
+  <div style="margin-top:8px">
+    <div class="section-title" style="font-size:1rem;margin-bottom:12px">Topic Partitions (3 per topic)</div>
+    <div class="partition-wrap" id="partition-wrap">
+      <!-- injected by JS -->
+    </div>
+  </div>
+
+  <div class="steps" style="margin-top:20px">
+    <div class="step">
+      <div class="step-num" style="color:var(--orange)">Produce</div>
+      <div class="step-title">KafkaHelper.produce()</div>
+      <div class="step-desc">Accepts a topic, key, value, and optional headers. Serialises to JSON, adds a <code>trace-id</code> header, sends via KafkaJS producer.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--yellow)">Partition</div>
+      <div class="step-title">Key-based routing</div>
+      <div class="step-desc">KafkaJS hashes the message key to select a partition, guaranteeing ordering for messages with the same key (e.g. same <code>orderId</code>).</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--green)">Consume</div>
+      <div class="step-title">KafkaHelper.consume(filter)</div>
+      <div class="step-desc">A predicate function is passed — only messages matching the filter resolve the promise. This avoids offset coupling and test pollution.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--red)">DLQ</div>
+      <div class="step-title">Dead-Letter Queue</div>
+      <div class="step-desc">Messages that fail processing are routed to <code>dead-letter-queue</code>. Tests assert DLQ receipt to verify error-path behaviour.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════
+  PANEL 3 · INTEGRATION FLOW
+═══════════════════════════════════ -->
+<div class="panel" id="panel-integration">
+  <div class="section-title">End-to-End Integration Flow</div>
+  <div class="section-sub">API action triggers a Kafka event chain — the test verifies both ends</div>
+
+  <div class="flow-wrap">
+    <div class="canvas h480" id="int-canvas">
+      <svg class="flow-svg" id="int-svg"></svg>
+    </div>
+    <div class="legend-row">
+      <div class="leg"><div class="leg-line" style="background:var(--accent)"></div>API call</div>
+      <div class="leg"><div class="leg-line" style="background:var(--orange)"></div>Kafka event</div>
+      <div class="leg"><div class="leg-line" style="background:var(--purple)"></div>Assertion</div>
+    </div>
+  </div>
+
+  <div class="section-title" style="font-size:1rem;margin:24px 0 12px">Event Timeline</div>
+  <div class="timeline-flow">
+    <div class="tf-row">
+      <div class="tf-dot" style="background:var(--accent);border-color:var(--accent)"></div>
+      <div class="tf-time">T+0ms</div>
+      <div class="tf-title">POST /orders</div>
+      <div class="tf-desc">Test calls <code>ApiHelper.post('/orders', payload)</code>. Backend creates the order, returns <code>201 Created</code>.</div>
+      <div class="tf-badge" style="color:var(--accent);border-color:var(--accent)">API</div>
+    </div>
+    <div class="tf-row">
+      <div class="tf-dot" style="background:var(--orange);border-color:var(--orange)"></div>
+      <div class="tf-time">T+~50ms</div>
+      <div class="tf-title">OrderCreated → orders topic</div>
+      <div class="tf-desc">Backend publishes an <code>OrderEvent</code> to the <code>orders</code> topic. Test's consumer is already subscribed and filtering by <code>orderId</code>.</div>
+      <div class="tf-badge" style="color:var(--orange);border-color:var(--orange)">Kafka</div>
+    </div>
+    <div class="tf-row">
+      <div class="tf-dot" style="background:var(--yellow);border-color:var(--yellow)"></div>
+      <div class="tf-time">T+~120ms</div>
+      <div class="tf-title">Payment service processes order</div>
+      <div class="tf-desc">Downstream payment service consumes the order event and initiates a payment.</div>
+      <div class="tf-badge" style="color:var(--yellow);border-color:var(--yellow)">Downstream</div>
+    </div>
+    <div class="tf-row">
+      <div class="tf-dot" style="background:var(--green);border-color:var(--green)"></div>
+      <div class="tf-time">T+~200ms</div>
+      <div class="tf-title">PaymentProcessed → payments topic</div>
+      <div class="tf-desc">A <code>PaymentEvent</code> lands on the <code>payments</code> topic. Test waits via <code>waitForMessage()</code> with a timeout guard.</div>
+      <div class="tf-badge" style="color:var(--green);border-color:var(--green)">Kafka</div>
+    </div>
+    <div class="tf-row">
+      <div class="tf-dot" style="background:var(--cyan);border-color:var(--cyan)"></div>
+      <div class="tf-time">T+~210ms</div>
+      <div class="tf-title">audit-events published</div>
+      <div class="tf-desc">Both the order and payment actions emit entries to <code>audit-events</code>. The integration test verifies trace-id correlation across both events.</div>
+      <div class="tf-badge" style="color:var(--cyan);border-color:var(--cyan)">Audit</div>
+    </div>
+    <div class="tf-row">
+      <div class="tf-dot" style="background:var(--purple);border-color:var(--purple)"></div>
+      <div class="tf-time">T+~220ms</div>
+      <div class="tf-title">Assertions pass</div>
+      <div class="tf-desc">Test asserts: order status = CONFIRMED, payment status = COMPLETED, trace-ids match across topics, audit log complete.</div>
+      <div class="tf-badge" style="color:var(--purple);border-color:var(--purple)">Assert</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════
+  PANEL 4 · CI PIPELINE
+═══════════════════════════════════ -->
+<div class="panel" id="panel-ci">
+  <div class="section-title">GitHub Actions CI Pipeline</div>
+  <div class="section-sub">Every push and pull request runs this DAG automatically</div>
+
+  <div class="flow-wrap">
+    <div style="overflow-x:auto">
+    <div class="ci-pipe" style="min-width:560px;padding:8px 0">
+      <!-- stage 1 -->
+      <div class="ci-stage" style="border-color:var(--accent)">
+        <div class="ci-icon">🔍</div>
+        <div class="ci-name" style="color:var(--accent)">lint &amp; typecheck</div>
+        <div class="ci-detail">ESLint · tsc --noEmit</div>
+      </div>
+      <div class="ci-arrow">→</div>
+      <!-- parallel fork -->
+      <div class="ci-fork">
+        <div class="ci-parallel">
+          <div class="ci-stage" style="border-color:var(--green)">
+            <div class="ci-icon">🌐</div>
+            <div class="ci-name" style="color:var(--green)">test-api</div>
+            <div class="ci-detail">MockServer container</div>
+          </div>
+          <div class="ci-arrow" style="font-size:1rem">↓</div>
+        </div>
+        <div class="ci-parallel">
+          <div class="ci-stage" style="border-color:var(--orange)">
+            <div class="ci-icon">📨</div>
+            <div class="ci-name" style="color:var(--orange)">test-kafka</div>
+            <div class="ci-detail">Confluent container</div>
+          </div>
+          <div class="ci-arrow" style="font-size:1rem">↓</div>
+        </div>
+      </div>
+      <div class="ci-arrow">→</div>
+      <div class="ci-stage" style="border-color:var(--purple)">
+        <div class="ci-icon">🔗</div>
+        <div class="ci-name" style="color:var(--purple)">test-integration</div>
+        <div class="ci-detail">needs: api + kafka</div>
+      </div>
+      <div class="ci-arrow">→</div>
+      <div class="ci-stage" style="border-color:var(--yellow)">
+        <div class="ci-icon">📊</div>
+        <div class="ci-name" style="color:var(--yellow)">publish-report</div>
+        <div class="ci-detail">HTML · JSON · summary</div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num" style="color:var(--accent)">Gate 01</div>
+      <div class="step-title">Lint &amp; Type-check</div>
+      <div class="step-desc">ESLint with <code>@typescript-eslint</code> rules + <code>tsc --noEmit</code> strict mode. Zero errors required before any test job starts.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--green)">Gate 02</div>
+      <div class="step-title">API Tests</div>
+      <div class="step-desc">Runs in parallel with Kafka tests. A MockServer Docker service container stands in for the real backend. Covers health, orders, payments.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--orange)">Gate 03</div>
+      <div class="step-title">Kafka Tests</div>
+      <div class="step-desc">Confluent Platform container is spun up. Topics are pre-created via a setup step. Producer, consumer, and message-flow specs run.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--purple)">Gate 04</div>
+      <div class="step-title">Integration Tests</div>
+      <div class="step-desc"><code>needs: [test-api, test-kafka]</code> — only runs if both pass. Tests the full API → Kafka → downstream chain in one job.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--yellow)">Gate 05</div>
+      <div class="step-title">Publish Report</div>
+      <div class="step-desc">HTML report, <code>results.json</code>, and trace zips uploaded as artifacts (14-day retention). Markdown summary posted to step summary.</div>
+    </div>
+    <div class="step">
+      <div class="step-num" style="color:var(--muted)">Always</div>
+      <div class="step-title">Artifacts</div>
+      <div class="step-desc">Artifacts are uploaded even on failure so engineers can inspect traces and logs without re-running the failing suite locally.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════
+   UTILITIES
+═══════════════════════════════════════════════ */
+function pct(canvas, x, y){
+  const r=canvas.getBoundingClientRect();
+  return{x:r.width*(x/100),y:r.height*(y/100)};
+}
+
+function makeSVGLine(svg,x1,y1,x2,y2,color,dashed=false){
+  const l=document.createElementNS("http://www.w3.org/2000/svg","line");
+  l.setAttribute("x1",x1);l.setAttribute("y1",y1);
+  l.setAttribute("x2",x2);l.setAttribute("y2",y2);
+  l.setAttribute("stroke",color);l.setAttribute("stroke-width","2");
+  l.setAttribute("stroke-linecap","round");
+  if(dashed) l.setAttribute("stroke-dasharray","6 4");
+  svg.appendChild(l);return l;
+}
+
+function makeSVGArrow(svg,x1,y1,x2,y2,color,dashed=false,id=""){
+  const g=document.createElementNS("http://www.w3.org/2000/svg","g");
+  const line=document.createElementNS("http://www.w3.org/2000/svg","line");
+  line.setAttribute("x1",x1);line.setAttribute("y1",y1);
+  line.setAttribute("x2",x2);line.setAttribute("y2",y2);
+  line.setAttribute("stroke",color);line.setAttribute("stroke-width","2");
+  line.setAttribute("stroke-linecap","round");
+  if(dashed) line.setAttribute("stroke-dasharray","6 4");
+  // arrowhead
+  const dx=x2-x1,dy=y2-y1,len=Math.sqrt(dx*dx+dy*dy);
+  const ux=dx/len,uy=dy/len;
+  const ax=x2-ux*10,ay=y2-uy*10;
+  const px=-uy*5,py=ux*5;
+  const poly=document.createElementNS("http://www.w3.org/2000/svg","polygon");
+  poly.setAttribute("points",`${x2},${y2} ${ax+px},${ay+py} ${ax-px},${ay-py}`);
+  poly.setAttribute("fill",color);
+  g.appendChild(line);g.appendChild(poly);
+  svg.appendChild(g);return g;
+}
+
+function makeNode(canvas,xPct,yPct,icon,label,cls){
+  const n=document.createElement("div");
+  n.className="node";
+  n.style.left=xPct+"%";n.style.top=yPct+"%";
+  n.innerHTML=`<div class="node-box ${cls}"><div class="node-icon">${icon}</div>${label}</div>`;
+  canvas.appendChild(n);
+  return n;
+}
+
+/* animate a packet along a straight line */
+function animatePacket(canvas,x1pct,y1pct,x2pct,y2pct,color,delay,duration,repeat){
+  const p=document.createElement("div");
+  p.className="packet";
+  p.style.background=color;p.style.color=color;
+  canvas.appendChild(p);
+  function run(){
+    const r=canvas.getBoundingClientRect();
+    const sx=r.width*(x1pct/100),sy=r.height*(y1pct/100);
+    const ex=r.width*(x2pct/100),ey=r.height*(y2pct/100);
+    p.style.left=(sx-6)+"px";p.style.top=(sy-6)+"px";
+    p.style.opacity="0";
+    setTimeout(()=>{
+      p.style.transition=`left ${duration}ms linear, top ${duration}ms linear, opacity 100ms`;
+      p.style.opacity="1";
+      p.style.left=(ex-6)+"px";p.style.top=(ey-6)+"px";
+      setTimeout(()=>{p.style.opacity="0";},duration-80);
+      if(repeat) setTimeout(run,duration+300);
+    },delay);
+  }
+  setTimeout(run, delay);
+}
+
+/* ═══════════════════════════════════════════════
+   PANEL 1 · API
+═══════════════════════════════════════════════ */
+function buildAPI(){
+  const canvas=document.getElementById("api-canvas");
+  const svg=document.getElementById("api-svg");
+  canvas.style.height="400px";
+
+  //  [xPct, yPct, icon, label, class]
+  makeNode(canvas,  8, 20, "📝", "Spec File",           "nb-blue");
+  makeNode(canvas,  8, 62, "⚙️",  "Fixture",              "nb-blue");
+  makeNode(canvas, 35, 10, "🏭", "Data Factory",         "nb-purple");
+  makeNode(canvas, 35, 43, "🔧", "ApiHelper",            "nb-blue");
+  makeNode(canvas, 35, 80, "🔄", "Retry / Logger",       "nb-yellow");
+  makeNode(canvas, 70, 20, "🖥️", "mock-server.js\n:3000","nb-green");
+  makeNode(canvas, 70, 72, "📦", "api.model.ts",         "nb-orange");
+  makeNode(canvas, 93, 43, "✅", "Assert",               "nb-purple");
+
+  function drawArrows(){
+    svg.innerHTML="";
+    const r=canvas.getBoundingClientRect();
+    const pt=(x,y)=>({x:r.width*(x/100),y:r.height*(y/100)});
+    const A=(x1,y1,x2,y2,c,d=false)=>makeSVGArrow(svg,x1,y1,x2,y2,c,d);
+    const blue="#58a6ff",green="#3fb950",purple="#bc8cff",orange="#f0883e",yellow="#e3b341";
+
+    const spec=pt(8,20), fix=pt(8,62), factory=pt(35,10);
+    const helper=pt(35,43), retry=pt(35,80);
+    const server=pt(70,20), model=pt(70,72), assert=pt(93,43);
+
+    // test layer → ApiHelper
+    A(spec.x+8,    spec.y,       helper.x-8,  helper.y-10, blue);
+    A(fix.x+8,     fix.y,        helper.x-8,  helper.y+10, blue);
+    // support nodes → ApiHelper
+    A(factory.x,   factory.y+10, helper.x,    helper.y-14, purple);
+    A(retry.x,     retry.y-10,   helper.x,    helper.y+14, yellow);
+
+    // ── HTTP Request: ApiHelper → mock-server.js :3000 ──
+    A(helper.x+10, helper.y-8,   server.x-8,  server.y+8,  blue);
+
+    // ── HTTP Response: mock-server.js → ApiHelper (the missing link) ──
+    A(server.x-10, server.y+16,  helper.x+10, helper.y-2,  green, true);
+
+    // Response body also flows into api.model.ts for type casting
+    A(server.x,    server.y+16,  model.x,     model.y-14,  green);
+
+    // Typed response → Assert
+    A(model.x+8,   model.y,      assert.x-8,  assert.y+10, purple);
+  }
+  drawArrows();
+  window.addEventListener("resize",drawArrows);
+
+  // Packets: spec→helper → request out → response back to helper → model → assert
+  setInterval(()=>{
+    animatePacket(canvas,  8, 20, 35, 43, "#58a6ff",    0, 600, false); // spec → ApiHelper
+    animatePacket(canvas, 35, 43, 70, 20, "#58a6ff",  700, 700, false); // HTTP Request →
+    animatePacket(canvas, 70, 20, 35, 43, "#3fb950", 1500, 700, false); // HTTP Response → ApiHelper
+    animatePacket(canvas, 70, 20, 70, 72, "#3fb950", 1500, 600, false); // response body → model
+    animatePacket(canvas, 70, 72, 93, 43, "#bc8cff", 2200, 500, false); // typed result → Assert
+  },3500);
+}
+
+/* ═══════════════════════════════════════════════
+   PANEL 2 · KAFKA
+═══════════════════════════════════════════════ */
+function buildKafka(){
+  const canvas=document.getElementById("kafka-canvas");
+  const svg=document.getElementById("kafka-svg");
+  canvas.style.height="380px";
+
+  makeNode(canvas,12,25,"📝","Test Spec","nb-blue");
+  makeNode(canvas,12,65,"⚙️","KafkaHelper","nb-orange");
+  makeNode(canvas,42,25,"📤","Producer","nb-orange");
+  makeNode(canvas,42,65,"📥","Consumer","nb-green");
+  makeNode(canvas,68,45,"📋","Kafka Broker\n:9092","nb-yellow");
+  makeNode(canvas,68,15,"📁","orders topic","nb-yellow");
+  makeNode(canvas,68,75,"📁","payments topic","nb-orange");
+  makeNode(canvas,90,45,"🔴","DLQ","nb-red");
+
+  function drawArrows(){
+    svg.innerHTML="";
+    const r=canvas.getBoundingClientRect();
+    const pt=(x,y)=>({x:r.width*(x/100),y:r.height*(y/100)});
+    const A=(x1,y1,x2,y2,c,d=false)=>makeSVGArrow(svg,x1,y1,x2,y2,c,d);
+    const n=[
+      [12,25],[12,65],[42,25],[42,65],[68,45],[68,15],[68,75],[90,45]
+    ].map(([x,y])=>pt(x,y));
+
+    A(n[0].x,n[0].y,n[1].x,n[1].y-10,"#58a6ff");
+    A(n[1].x,n[1].y-5,n[2].x,n[2].y+5,"#f0883e");
+    A(n[1].x,n[1].y+5,n[3].x,n[3].y-5,"#3fb950");
+    A(n[2].x,n[2].y,n[4].x,n[4].y-10,"#f0883e");
+    A(n[4].x-5,n[4].y-15,n[5].x,n[5].y+10,"#e3b341");
+    A(n[4].x-5,n[4].y+15,n[6].x,n[6].y-10,"#e3b341");
+    A(n[5].x,n[5].y,n[3].x,n[3].y-10,"#3fb950",true);
+    A(n[4].x+10,n[4].y,n[7].x,n[7].y,"#f85149",true);
+  }
+  drawArrows();
+  window.addEventListener("resize",drawArrows);
+
+  // packets
+  setInterval(()=>{
+    animatePacket(canvas,12,65,42,25,"#f0883e",0,600,false);
+    animatePacket(canvas,42,25,68,45,"#f0883e",700,600,false);
+    animatePacket(canvas,68,45,68,15,"#e3b341",1400,400,false);
+    animatePacket(canvas,68,15,42,65,"#3fb950",1900,700,false);
+  },3000);
+
+  // partition demo
+  const wrap=document.getElementById("partition-wrap");
+  const topics=["orders","payments","audit-events"];
+  const colors=["var(--orange)","var(--green)","var(--cyan)"];
+  const samples=[
+    [["order-1","OrderCreated"],["order-2","OrderCreated"],["order-3","OrderUpdated"]],
+    [["pay-1","PaymentOK"],["pay-2","PaymentFailed"],["pay-3","PaymentOK"]],
+    [["aud-1","AuditLog"],["aud-2","AuditLog"],["aud-3","AuditLog"]],
+  ];
+  topics.forEach((t,ti)=>{
+    const d=document.createElement("div");d.className="partition";
+    d.innerHTML=`<div class="part-header" style="color:${colors[ti]}">${t}</div><div class="part-messages" id="pm-${ti}"></div>`;
+    wrap.appendChild(d);
+    let off=0;
+    function addMsg(){
+      const pm=document.getElementById(`pm-${ti}`);
+      if(!pm) return;
+      const msgs=samples[ti];
+      const [key,val]=msgs[off%msgs.length];
+      const row=document.createElement("div");row.className="msg-row";
+      row.style.animationDelay=(off*0.05)+"s";
+      row.innerHTML=`<span class="offset">${off}</span><span style="color:${colors[ti]}">${key}</span><span style="margin-left:4px;color:var(--muted)">${val}</span>`;
+      pm.appendChild(row);off++;
+      if(pm.children.length>5) pm.removeChild(pm.firstChild);
+    }
+    for(let i=0;i<3;i++) addMsg();
+    setInterval(addMsg,1200+ti*400);
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   PANEL 3 · INTEGRATION
+═══════════════════════════════════════════════ */
+function buildIntegration(){
+  const canvas=document.getElementById("int-canvas");
+  const svg=document.getElementById("int-svg");
+  canvas.style.height="440px";
+
+  makeNode(canvas,10,50,"📝","Test Spec","nb-blue");
+  makeNode(canvas,30,20,"🔧","ApiHelper","nb-blue");
+  makeNode(canvas,30,80,"⚙️","KafkaHelper","nb-orange");
+  makeNode(canvas,55,20,"🌐","REST API\n(Backend)","nb-green");
+  makeNode(canvas,55,50,"📋","Kafka Broker","nb-yellow");
+  makeNode(canvas,55,80,"📁","orders topic","nb-orange");
+  makeNode(canvas,78,35,"💳","Payment\nService","nb-purple");
+  makeNode(canvas,78,65,"📁","payments\ntopic","nb-green");
+  makeNode(canvas,78,85,"📁","audit-events","nb-cyan");
+  makeNode(canvas,95,50,"✅","Assertions","nb-purple");
+
+  function drawArrows(){
+    svg.innerHTML="";
+    const r=canvas.getBoundingClientRect();
+    const pt=(x,y)=>({x:r.width*(x/100),y:r.height*(y/100)});
+    const A=(x1,y1,x2,y2,c,d=false)=>makeSVGArrow(svg,x1,y1,x2,y2,c,d);
+    const n=[
+      [10,50],[30,20],[30,80],[55,20],[55,50],[55,80],[78,35],[78,65],[78,85],[95,50]
+    ].map(([x,y])=>pt(x,y));
+
+    A(n[0].x,n[0].y-10,n[1].x,n[1].y+5,"#58a6ff");
+    A(n[0].x,n[0].y+10,n[2].x,n[2].y-5,"#f0883e");
+    A(n[1].x,n[1].y,n[3].x,n[3].y,"#58a6ff");
+    A(n[3].x,n[3].y+10,n[4].x,n[4].y-10,"#f0883e");
+    A(n[4].x,n[4].y+10,n[5].x,n[5].y-10,"#f0883e");
+    A(n[5].x,n[5].y-5,n[6].x,n[6].y+10,"#bc8cff");
+    A(n[6].x,n[6].y,n[7].x,n[7].y-10,"#3fb950");
+    A(n[4].x+5,n[4].y+5,n[8].x,n[8].y-5,"#39d353",true);
+    A(n[7].x,n[7].y,n[9].x,n[9].y-5,"#bc8cff",true);
+    A(n[8].x,n[8].y,n[9].x,n[9].y+5,"#39d353",true);
+    A(n[2].x,n[2].y,n[5].x,n[5].y,"#3fb950",true);
+  }
+  drawArrows();
+  window.addEventListener("resize",drawArrows);
+
+  // packets along the chain
+  setInterval(()=>{
+    animatePacket(canvas,10,50,30,20,"#58a6ff",0,500,false);
+    animatePacket(canvas,30,20,55,20,"#58a6ff",600,500,false);
+    animatePacket(canvas,55,20,55,50,"#f0883e",1200,400,false);
+    animatePacket(canvas,55,50,55,80,"#f0883e",1700,400,false);
+    animatePacket(canvas,55,80,78,35,"#bc8cff",2200,600,false);
+    animatePacket(canvas,78,35,78,65,"#3fb950",2900,400,false);
+    animatePacket(canvas,78,65,95,50,"#bc8cff",3400,500,false);
+  },4200);
+}
+
+/* ═══════════════════════════════════════════════
+   TAB SWITCHING
+═══════════════════════════════════════════════ */
+const built={};
+function show(id){
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  document.getElementById("panel-"+id).classList.add("active");
+  event.target.classList.add("active");
+  if(!built[id]){
+    built[id]=true;
+    if(id==="api")         buildAPI();
+    if(id==="kafka")       buildKafka();
+    if(id==="integration") buildIntegration();
+  }
+}
+
+// Build first panel on load
+window.addEventListener("load",()=>buildAPI());
+</script>
+</body>
+</html>

@@ -18,7 +18,7 @@ export class KafkaHelper {
   }
 
   async connect(): Promise<void> {
-    this.producer = this.kafka.producer({ allowAutoTopicCreation: false });
+    this.producer = this.kafka.producer({ allowAutoTopicCreation: true });
     this.admin = this.kafka.admin();
     await Promise.all([this.producer.connect(), this.admin.connect()]);
     logger.info('Kafka producer and admin connected');
@@ -84,7 +84,7 @@ export class KafkaHelper {
     this.consumers.push(consumer);
 
     await consumer.connect();
-    await consumer.subscribe({ topic, fromBeginning: false });
+    await consumer.subscribe({ topic, fromBeginning: true });
 
     const deadline = Date.now() + timeoutMs;
 
