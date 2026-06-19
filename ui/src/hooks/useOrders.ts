@@ -36,5 +36,17 @@ export function useOrders() {
     return order;
   }, []);
 
-  return { orders, loading, refresh, create, cancel, confirm };
+  const remove = useCallback(async (id: string) => {
+    await api.del<{ id: string; deleted: boolean }>(`/api/v1/orders/${id}`);
+    setOrders(prev => prev.filter(o => o.id !== id));
+  }, []);
+
+  const removeMany = useCallback(async (ids: string[]) => {
+    const results = await Promise.allSettled(ids.map(id => api.del(`/api/v1/orders/${id}`)));
+    const count = results.filter(r => r.status === 'fulfilled').length;
+    setOrders(prev => prev.filter(o => !ids.includes(o.id)));
+    return count;
+  }, []);
+
+  return { orders, loading, refresh, create, cancel, confirm, remove, removeMany };
 }

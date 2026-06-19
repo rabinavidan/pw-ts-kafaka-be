@@ -24,7 +24,7 @@ function randomOrderPayload() {
 }
 
 export function OrdersPanel({ onToast }: Props) {
-  const { orders, loading, refresh, create, cancel, confirm } = useOrders();
+  const { orders, loading, refresh, create, cancel, confirm, remove, removeMany } = useOrders();
   const [filter, setFilter]         = useState<Filter>('all');
   const [showModal, setShowModal]   = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -41,19 +41,14 @@ export function OrdersPanel({ onToast }: Props) {
   useEffect(() => { refresh(filter === 'all' ? undefined : filter); }, [filter, refresh]);
   useEffect(() => { setSelected(new Set()); }, [filter]);
 
-  const visible    = filter === 'all' ? orders : orders.filter(o => o.status === filter);
-  const actionable = visible.filter(o => o.status === 'created');
-
-  const allSelected     = actionable.length > 0 && actionable.every(o => selected.has(o.id));
-  const someSelected    = actionable.some(o => selected.has(o.id));
+  const visible         = filter === 'all' ? orders : orders.filter(o => o.status === filter);
+  const allSelected     = visible.length > 0 && visible.every(o => selected.has(o.id));
+  const someSelected    = visible.some(o => selected.has(o.id));
   const selectedCreated = visible.filter(o => selected.has(o.id) && o.status === 'created');
+  const selectedAny     = visible.filter(o => selected.has(o.id));
 
   function toggleAll() {
-    if (allSelected) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(actionable.map(o => o.id)));
-    }
+    setSelected(allSelected ? new Set() : new Set(visible.map(o => o.id)));
   }
 
   function toggleRow(id: string) {
@@ -139,6 +134,23 @@ export function OrdersPanel({ onToast }: Props) {
     catch { onToast('error', 'Failed to cancel order'); }
   }
 
+  async function handleDelete(id: string) {
+    try { await remove(id); onToast('success', 'Order deleted'); }
+    catch { onToast('error', 'Failed to delete order'); }
+  }
+
+  async function handleBulkDelete() {
+    const targets = selectedAny;
+    if (targets.length === 0) return;
+    setBulkRunning(true);
+    setBulkLabel(`Deleting 0/${targets.length}…`);
+    const count = await removeMany(targets.map(o => o.id));
+    setBulkRunning(false);
+    setBulkLabel('');
+    clearSelection();
+    onToast('success', `${count}/${targets.length} orders deleted`);
+  }
+
   const selCount = selected.size;
 
   return (
@@ -215,6 +227,15 @@ export function OrdersPanel({ onToast }: Props) {
                 >
                   ✕ Cancel {selectedCreated.length > 0 && `(${selectedCreated.length})`}
                 </button>
+                <button
+                  className="btn btn-sm"
+                  style={{ background: 'rgba(239,68,68,.12)', color: '#f87171', border: '1px solid rgba(239,68,68,.3)' }}
+                  disabled={selectedAny.length === 0}
+                  onClick={handleBulkDelete}
+                  data-testid="btn-bulk-delete-orders"
+                >
+                  🗑 Delete {selectedAny.length > 0 && `(${selectedAny.length})`}
+                </button>
               </>
             )}
           </div>
@@ -263,27 +284,24 @@ export function OrdersPanel({ onToast }: Props) {
             </thead>
             <tbody>
               {visible.map(o => {
-                const isSelected   = selected.has(o.id);
-                const isActionable = o.status === 'created';
+                const isSelected = selected.has(o.id);
                 return (
                   <tr
                     key={o.id}
                     className={isSelected ? 'row-selected' : ''}
-                    onClick={isActionable ? () => toggleRow(o.id) : undefined}
-                    style={isActionable ? { cursor: 'pointer' } : undefined}
+                    onClick={() => toggleRow(o.id)}
+                    style={{ cursor: 'pointer' }}
                     data-testid={`order-row-${o.id}`}
                     data-order-status={o.status}
                   >
                     <td onClick={e => e.stopPropagation()}>
-                      {isActionable && (
-                        <input
-                          type="checkbox"
-                          className="row-cb"
-                          checked={isSelected}
-                          onChange={() => toggleRow(o.id)}
-                          data-testid={`order-row-cb-${o.id}`}
-                        />
-                      )}
+                      <input
+                        type="checkbox"
+                        className="row-cb"
+                        checked={isSelected}
+                        onChange={() => toggleRow(o.id)}
+                        data-testid={`order-row-cb-${o.id}`}
+                      />
                     </td>
                     <td><span className="mono" title={o.id}>{o.id.slice(0, 8)}…</span></td>
                     <td><span className="mono" title={o.userId}>{o.userId.slice(0, 12)}…</span></td>
@@ -309,6 +327,13 @@ export function OrdersPanel({ onToast }: Props) {
                             >✕</button>
                           </>
                         )}
+                        <button
+                          className="btn btn-sm"
+                          style={{ background: 'rgba(239,68,68,.08)', color: '#f87171', border: '1px solid rgba(239,68,68,.2)' }}
+                          title="Delete"
+                          onClick={() => handleDelete(o.id)}
+                          data-testid={`btn-delete-order-${o.id}`}
+                        >🗑</button>
                       </div>
                     </td>
                   </tr>

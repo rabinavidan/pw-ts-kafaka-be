@@ -230,6 +230,76 @@ test.describe('Payments — bulk create', () => {
   });
 });
 
+test.describe('Payments — delete', () => {
+  test('single delete removes payment row from table', async ({ page, paymentsPage }) => {
+    await paymentsPage.createPayment(crypto.randomUUID());
+    await expect(page.getByTestId('toast')).toBeVisible();
+
+    const rows = paymentsPage.rows();
+    await rows.first().waitFor({ state: 'visible' });
+    const paymentId = await rows.first().getAttribute('data-testid').then(v => v?.replace('payment-row-', '') ?? '');
+
+    await paymentsPage.btnDeletePayment(paymentId).click();
+
+    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(paymentsPage.paymentRow(paymentId)).not.toBeVisible();
+  });
+
+  test('single delete works on processed payment', async ({ page, paymentsPage }) => {
+    await paymentsPage.createPayment(crypto.randomUUID());
+    await expect(page.getByTestId('toast')).toBeVisible();
+
+    const pendingRows = paymentsPage.rowsWithStatus('pending');
+    await pendingRows.first().waitFor();
+    const paymentId = await pendingRows.first().getAttribute('data-testid').then(v => v?.replace('payment-row-', '') ?? '');
+
+    await paymentsPage.paymentRowCb(paymentId).check();
+    await paymentsPage.btnBulkProcess.click();
+    await expect(paymentsPage.paymentStatus(paymentId)).toContainText('processed');
+
+    await paymentsPage.btnDeletePayment(paymentId).click();
+
+    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(paymentsPage.paymentRow(paymentId)).not.toBeVisible();
+  });
+
+  test('bulk delete removes all selected payments', async ({ page, paymentsPage }) => {
+    await paymentsPage.createPayment(crypto.randomUUID());
+    await paymentsPage.createPayment(crypto.randomUUID());
+
+    await paymentsPage.selectAll.check();
+    await expect(paymentsPage.bulkBar).toBeVisible();
+
+    await paymentsPage.btnBulkDelete.click();
+
+    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(paymentsPage.bulkBar).not.toBeVisible();
+  });
+
+  test('bulk delete hides bulk bar after completion', async ({ page, paymentsPage }) => {
+    await paymentsPage.createPayment(crypto.randomUUID());
+    await paymentsPage.selectAll.check();
+    await paymentsPage.btnBulkDelete.click();
+
+    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.bulkBar).not.toBeVisible();
+  });
+
+  test('deleting a payment emits payment.deleted event in feed', async ({ page, paymentsPage, eventFeed }) => {
+    await paymentsPage.createPayment(crypto.randomUUID());
+    await expect(page.getByTestId('toast')).toBeVisible();
+
+    const rows = paymentsPage.rows();
+    await rows.first().waitFor();
+    const paymentId = await rows.first().getAttribute('data-testid').then(v => v?.replace('payment-row-', '') ?? '');
+
+    await paymentsPage.btnDeletePayment(paymentId).click();
+
+    await eventFeed.waitForEventType('payment.deleted');
+    await expect(eventFeed.eventsOfType('payment.deleted').first()).toBeVisible();
+  });
+});
+
 test.describe('Payments — Kafka events', () => {
   test('creating a payment emits payment.initiated in event feed', async ({ paymentsPage, eventFeed }) => {
     await paymentsPage.createPayment(crypto.randomUUID());

@@ -13,6 +13,7 @@ export class OrdersPage {
   readonly bulkBarCount:     Locator;
   readonly btnBulkConfirm:   Locator;
   readonly btnBulkCancel:    Locator;
+  readonly btnBulkDelete:    Locator;
   readonly btnDeselectAll:   Locator;
   // Modal
   readonly modal:            Locator;
@@ -38,6 +39,7 @@ export class OrdersPage {
     this.bulkBarCount   = page.getByTestId('bulk-bar-count');
     this.btnBulkConfirm = page.getByTestId('btn-bulk-confirm');
     this.btnBulkCancel  = page.getByTestId('btn-bulk-cancel');
+    this.btnBulkDelete  = page.getByTestId('btn-bulk-delete-orders');
     this.btnDeselectAll = page.getByTestId('btn-deselect-all');
     this.modal          = page.getByTestId('modal-new-order');
     this.modalClose     = page.getByTestId('btn-modal-close');
@@ -59,6 +61,7 @@ export class OrdersPage {
   orderStatus(id: string)     { return this.page.getByTestId(`order-status-${id}`); }
   btnConfirmOrder(id: string) { return this.page.getByTestId(`btn-confirm-order-${id}`); }
   btnCancelOrder(id: string)  { return this.page.getByTestId(`btn-cancel-order-${id}`); }
+  btnDeleteOrder(id: string)  { return this.page.getByTestId(`btn-delete-order-${id}`); }
   productIdInput(idx: number) { return this.page.getByTestId(`input-product-id-${idx}`); }
   quantityInput(idx: number)  { return this.page.getByTestId(`input-quantity-${idx}`); }
   btnRemoveItem(idx: number)  { return this.page.getByTestId(`btn-remove-item-${idx}`); }

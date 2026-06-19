@@ -29,5 +29,17 @@ export function usePayments() {
     return payment;
   }, []);
 
-  return { payments, create, process, refund, fail };
+  const remove = useCallback(async (id: string) => {
+    await api.del<{ id: string; deleted: boolean }>(`/api/v1/payments/${id}`);
+    setPayments(prev => prev.filter(p => p.id !== id));
+  }, []);
+
+  const removeMany = useCallback(async (ids: string[]) => {
+    const results = await Promise.allSettled(ids.map(id => api.del(`/api/v1/payments/${id}`)));
+    const count = results.filter(r => r.status === 'fulfilled').length;
+    setPayments(prev => prev.filter(p => !ids.includes(p.id)));
+    return count;
+  }, []);
+
+  return { payments, create, process, refund, fail, remove, removeMany };
 }

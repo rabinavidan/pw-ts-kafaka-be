@@ -4,13 +4,14 @@ import { OrdersPanel } from './components/OrdersPanel';
 import { PaymentsPanel } from './components/PaymentsPanel';
 import { EventFeed } from './components/EventFeed';
 import { InfraPanel } from './components/InfraPanel';
+import { HtmlViewer } from './components/HtmlViewer';
 import { useHealth } from './hooks/useHealth';
 import type { Toast } from './types';
 
-type Tab = 'infra' | 'orders' | 'payments';
+type Tab = 'infra' | 'orders' | 'payments' | 'dataflow' | 'lifecycle' | 'testreport';
 
 export default function App() {
-  const [tab, setTab]       = useState<Tab>('infra');
+  const [tab, setTab]       = useState<Tab>('orders');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const health = useHealth();
 
@@ -20,17 +21,28 @@ export default function App() {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 3500);
   }, []);
 
+  const isHtmlTab = tab === 'dataflow' || tab === 'lifecycle' || tab === 'testreport';
+
   return (
     <>
       <Header tab={tab} onTabChange={setTab} health={health} />
-      <div className="app-body" data-testid="app-body">
-        <main className="main-panel" data-testid="main-panel">
-          {tab === 'infra'    && <InfraPanel />}
-          {tab === 'orders'   && <OrdersPanel   onToast={addToast} />}
-          {tab === 'payments' && <PaymentsPanel onToast={addToast} />}
-        </main>
-        {tab !== 'infra' && <EventFeed />}
-      </div>
+
+      {isHtmlTab ? (
+        <div className="html-tab-body" data-testid="app-body">
+          {tab === 'dataflow'   && <HtmlViewer src="/dataflow.html"    title="Data Flow" />}
+          {tab === 'lifecycle'  && <HtmlViewer src="/lifecycle.html"   title="Lifecycle" />}
+          {tab === 'testreport' && <HtmlViewer src="/test-report.html" title="Test Report" />}
+        </div>
+      ) : (
+        <div className="app-body" data-testid="app-body">
+          <main className="main-panel" data-testid="main-panel">
+            {tab === 'infra'    && <InfraPanel />}
+            {tab === 'orders'   && <OrdersPanel   onToast={addToast} />}
+            {tab === 'payments' && <PaymentsPanel onToast={addToast} />}
+          </main>
+          {(tab === 'orders' || tab === 'payments') && <EventFeed />}
+        </div>
+      )}
 
       {toasts.length > 0 && (
         <div className="toasts" data-testid="toast-container">

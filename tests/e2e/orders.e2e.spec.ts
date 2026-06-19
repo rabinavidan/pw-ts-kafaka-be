@@ -191,6 +191,75 @@ test.describe('Orders — bulk create', () => {
   });
 });
 
+test.describe('Orders — delete', () => {
+  test('single delete removes order row from table', async ({ page, ordersPage }) => {
+    await ordersPage.createOrder('del-user-01', 'del-prod-01');
+    await expect(page.getByTestId('toast')).toBeVisible();
+
+    const rows = ordersPage.rows();
+    await rows.first().waitFor({ state: 'visible' });
+    const orderId = await rows.first().getAttribute('data-testid').then(v => v?.replace('order-row-', '') ?? '');
+
+    await ordersPage.btnDeleteOrder(orderId).click();
+
+    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(ordersPage.orderRow(orderId)).not.toBeVisible();
+  });
+
+  test('single delete works on confirmed order', async ({ page, ordersPage }) => {
+    await ordersPage.createOrder('del-confirmed-user', 'del-confirmed-prod');
+    await expect(page.getByTestId('toast')).toBeVisible();
+
+    const createdRows = ordersPage.rowsWithStatus('created');
+    await createdRows.first().waitFor();
+    const orderId = await createdRows.first().getAttribute('data-testid').then(v => v?.replace('order-row-', '') ?? '');
+
+    await ordersPage.btnConfirmOrder(orderId).click();
+    await expect(ordersPage.orderStatus(orderId)).toContainText('confirmed');
+
+    await ordersPage.btnDeleteOrder(orderId).click();
+
+    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(ordersPage.orderRow(orderId)).not.toBeVisible();
+  });
+
+  test('bulk delete removes all selected orders', async ({ page, ordersPage }) => {
+    await ordersPage.createOrder('bulk-del-1', 'bulk-del-prod-1');
+    await ordersPage.createOrder('bulk-del-2', 'bulk-del-prod-2');
+
+    await ordersPage.selectAll.check();
+    await expect(ordersPage.bulkBar).toBeVisible();
+
+    await ordersPage.btnBulkDelete.click();
+
+    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(ordersPage.bulkBar).not.toBeVisible();
+  });
+
+  test('bulk delete hides bulk bar after completion', async ({ page, ordersPage }) => {
+    await ordersPage.createOrder('bulk-del-hide-1', 'prod-1');
+    await ordersPage.selectAll.check();
+    await ordersPage.btnBulkDelete.click();
+
+    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.bulkBar).not.toBeVisible();
+  });
+
+  test('deleting an order emits order.deleted event in feed', async ({ page, ordersPage, eventFeed }) => {
+    await ordersPage.createOrder('evt-del-user', 'evt-del-prod');
+    await expect(page.getByTestId('toast')).toBeVisible();
+
+    const rows = ordersPage.rows();
+    await rows.first().waitFor();
+    const orderId = await rows.first().getAttribute('data-testid').then(v => v?.replace('order-row-', '') ?? '');
+
+    await ordersPage.btnDeleteOrder(orderId).click();
+
+    await eventFeed.waitForEventType('order.deleted');
+    await expect(eventFeed.eventsOfType('order.deleted').first()).toBeVisible();
+  });
+});
+
 test.describe('Orders — Kafka events', () => {
   test('creating an order emits order.created event in feed', async ({ ordersPage, eventFeed }) => {
     await ordersPage.createOrder('evt-user', 'evt-prod');

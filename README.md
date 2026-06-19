@@ -9,7 +9,9 @@ This framework provides end-to-end test coverage across two layers:
 - **Backend tests** — REST API contract testing, Kafka producer/consumer flows, and integration pipeline verification against real Kafka brokers (or a mock server locally).
 - **E2E UI tests** — Browser-level tests for the React Orders & Payments dashboard using a Page Object Model (POM) layer backed by `data-testid` locators.
 
-The UI itself is a live React 18 + Vite SPA that connects to the mock server (`mock-server.js`) for development and CI, providing an Orders tab, Payments tab, and an Event Feed sidebar showing Kafka event activity in real time.
+The UI itself is a live React 18 + Vite SPA providing an Orders tab, Payments tab, Infrastructure tab, and an Event Feed sidebar showing Kafka event activity in real time.
+
+In **microservices mode** (Kubernetes or `npm run dev:all`), the stack runs as five independent services: a thin API gateway that routes HTTP requests, plus dedicated orders, payments, events, and notification services. Every state mutation publishes a Kafka event; the notification service consumes all topics and writes to a shared PostgreSQL `event_log` so the events feed is fully event-driven. In **local dev mode** (`npm run dev`), `mock-server.js` provides the same API surface as a single monolith backed by PostgreSQL.
 
 ---
 
@@ -19,16 +21,20 @@ Complete these steps in order before running any tests.
 
 ### 1. System Requirements
 
-| Tool | Version |
-|------|---------|
-| Node.js | 20+ |
-| npm | 9+ |
-| Docker | 24+ (for local Kafka — backend tests only) |
+| Tool | Version | Purpose |
+|------|---------|---------|
+| Node.js | 20+ | Test runner + mock server |
+| npm | 9+ | Package management |
+| Docker | 24+ | Container runtime |
+| kubectl | 1.28+ | Kubernetes CLI (K8s deployment) |
+| kind | 0.20+ | Local Kubernetes cluster |
 
 ```bash
 node -v
 npm -v
 docker -v
+kubectl version --client
+kind version
 ```
 
 ### 2. Install Root Dependencies
@@ -72,43 +78,120 @@ cp .env.example .env
 | `RETRY_ATTEMPTS` | `3` | Number of retry attempts |
 | `RETRY_DELAY` | `1000` | Delay between retries (ms) |
 | `LOG_LEVEL` | `info` | Winston log level |
+| `PGHOST` | `localhost` | PostgreSQL host |
+| `PGPORT` | `5432` | PostgreSQL port |
+| `PGDATABASE` | `mockdb` | Database name |
+| `PGUSER` | `mockuser` | Database user |
+| `PGPASSWORD` | `mockpass` | Database password |
 
-### 6. Start Local Kafka (for backend tests)
+### 6. Start the Stack
 
-Skip this step if you only need to run E2E UI tests — those use `mock-server.js` and don't require Kafka.
+Two options — docker-compose (simple) or Kubernetes (recommended).
 
-```bash
-# Start Zookeeper
-docker run -d --name zookeeper -p 2181:2181 \
-  -e ZOOKEEPER_CLIENT_PORT=2181 \
-  confluentinc/cp-zookeeper:7.6.0
+#### Option A · docker-compose
 
-# Start Kafka broker
-docker run -d --name kafka -p 9092:9092 \
-  --link zookeeper \
-  -e KAFKA_BROKER_ID=1 \
-  -e KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181 \
-  -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 \
-  -e KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1 \
-  -e KAFKA_AUTO_CREATE_TOPICS_ENABLE=true \
-  confluentinc/cp-kafka:7.6.0
-```
-
-Wait ~10 seconds, then create the required topics:
+Starts Zookeeper, Kafka, Kafka UI, **PostgreSQL**, and pgAdmin:
 
 ```bash
-for topic in orders payments notifications dead-letter-queue audit-events; do
-  docker exec kafka kafka-topics \
-    --bootstrap-server localhost:9092 \
-    --create --if-not-exists \
-    --topic $topic --partitions 3 --replication-factor 1
-done
+docker compose up -d
 ```
 
-Verify:
+Topics are created automatically by the `kafka-init` service. Verify:
 
 ```bash
 docker exec kafka kafka-topics --bootstrap-server localhost:9092 --list
+```
+
+Confirm the database schema was applied:
+
+```bash
+docker exec postgres psql -U mockuser -d mockdb -c "\dt"
+```
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Kafka UI | `http://localhost:8080` | — |
+| pgAdmin | `http://localhost:5050` | `admin@local.dev` / `admin` |
+| PostgreSQL (direct) | `localhost:5432` | `mockuser` / `mockpass` / db: `mockdb` |
+
+> In pgAdmin: **Add New Server** → Connection → Host: `postgres`, Port: `5432`, Username: `mockuser`, Password: `mockpass`.
+
+Broker address for `.env`: `KAFKA_BROKERS=localhost:9092`
+
+---
+
+#### Option B · Kubernetes (3-node kind cluster)
+
+**Cluster setup** (one-time):
+
+```bash
+# kind-config.yaml must have 1 control-plane + 2 workers
+kind create cluster --config kind-config.yaml
+
+# Label workers
+kubectl label node desktop-worker  role=infra
+kubectl label node desktop-worker2 role=app
+```
+
+**Build & load images** (repeat after code changes):
+
+```bash
+# Infrastructure / UI
+docker build -t pw-kafka-ui:latest ./ui
+
+# Microservices (from repo root)
+docker build -f gateway/Dockerfile       -t gateway:latest              .
+docker build -f services/orders/Dockerfile      -t orders-service:latest       .
+docker build -f services/payments/Dockerfile    -t payments-service:latest     .
+docker build -f services/events/Dockerfile      -t events-service:latest       .
+docker build -f services/notifications/Dockerfile -t notification-service:latest .
+
+# Load all into kind
+kind load docker-image pw-kafka-ui:latest
+kind load docker-image gateway:latest
+kind load docker-image orders-service:latest
+kind load docker-image payments-service:latest
+kind load docker-image events-service:latest
+kind load docker-image notification-service:latest
+```
+
+**Deploy everything**:
+
+```bash
+kubectl apply -f k8s/
+```
+
+**Watch rollout** (ZK → Kafka → kafka-init → PostgreSQL → notification-service → orders-service → payments-service → events-service → gateway → UI):
+
+```bash
+kubectl get pods -n pw-kafka-test -w
+```
+
+**Node layout**:
+
+| Node | Role | Pods |
+|------|------|------|
+| `desktop-control-plane` | system only (tainted) | — |
+| `desktop-worker` | `role=infra` | `zookeeper-0` · `kafka-0` · `kafka-init` · `postgres-0` |
+| `desktop-worker2` | `role=app` | `gateway` ×1 · `orders-service` ×2 · `payments-service` ×2 · `events-service` ×1 · `notification-service` ×1 · `ui` ×1 |
+
+**Access from Mac host** (via NodePort):
+
+| Service | NodePort | Use |
+|---------|----------|-----|
+| Kafka | `172.19.0.3:30092` | `KAFKA_BROKERS` in `.env` |
+| Gateway (API) | `172.19.0.3:30300` | `API_BASE_URL` in `.env` |
+| UI | `http://172.19.0.3:30080` | Browser |
+
+Update `.env` for K8s:
+```
+API_BASE_URL=http://172.19.0.3:30300
+KAFKA_BROKERS=172.19.0.3:30092
+```
+
+**Teardown**:
+```bash
+kubectl delete namespace pw-kafka-test
 ```
 
 ---
@@ -166,7 +249,17 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 ## Project Structure
 
 ```
-├── mock-server.js                     # In-memory REST + Kafka event mock (port 3000)
+├── mock-server.js                     # Monolith API server for local dev (npm run dev) — PostgreSQL-backed
+├── gateway/
+│   ├── index.js                       # HTTP proxy gateway (port 3000) — routes + aggregates /health
+│   └── Dockerfile
+├── services/
+│   ├── orders/index.js                # Orders CRUD + Kafka publish (port 3001)
+│   ├── payments/index.js              # Payments CRUD + Kafka publish (port 3002)
+│   ├── events/index.js                # Reads event_log, serves /api/v1/events (port 3003)
+│   └── notifications/index.js         # Kafka consumer → writes event_log + offsets (health: 3004)
+├── db/
+│   └── init.sql                       # PostgreSQL schema: orders, payments, event_log, kafka_consumer_offsets
 ├── generate-report.js                 # Pretty HTML report from Playwright JSON
 ├── generate-summary.js                # GitHub Actions job summary generator (HTML table)
 ├── playwright.config.ts               # Backend test projects (api, kafka, integration)
@@ -233,7 +326,9 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 
 ## Mock Server API Reference
 
-`mock-server.js` runs on port 3000 and provides all endpoints the UI and E2E tests use. State is in-memory and resets on restart.
+`mock-server.js` is the **local development monolith** — it runs on port 3000 and provides all API endpoints in a single process backed by PostgreSQL. Use it with `npm run dev`. In Kubernetes or `npm run dev:all`, the same surface is served by the microservices stack (gateway → orders/payments/events services); endpoints and payloads are identical.
+
+State is persisted in PostgreSQL — orders, payments, and the full event log survive server restarts. The server exits with an error if the database is unreachable at startup.
 
 | Method | Path | Description | Publishes to |
 |--------|------|-------------|-------------|
@@ -400,7 +495,9 @@ The summary includes: total / passed / failed / skipped counts, pass rate, and a
 | `npm run test:regression` | `@regression`-tagged tests |
 | `npm run test:e2e` | E2E UI tests (auto-starts mock server + Vite) |
 | `npm run test:report` | Open Playwright HTML report |
-| `npm run dev` | Start mock server + Vite dev server concurrently |
+| `npm run dev` | Start monolith mock-server + Vite dev server (local dev) |
+| `npm run dev:services` | Start all 5 microservices concurrently (no UI) |
+| `npm run dev:all` | Start all 5 microservices + Vite dev server |
 | `npm run ui:install` | Install UI npm dependencies |
 | `npm run ui:build` | Build UI for production |
 | `npm run lint` | ESLint |
@@ -433,6 +530,12 @@ npm run clean
 
 **Bulk-action as the reliable fail path.** The "fail" status for payments is triggered via the Bulk Fail button (`PUT /api/v1/payments/:id/fail`) rather than the `simulateFailure` form checkbox, avoiding React state-batching timing issues with native checkbox events.
 
+**PostgreSQL for persistence.** All orders, payments, and Kafka events are stored in PostgreSQL (`mockdb`) instead of in-memory Maps. Data survives mock-server restarts, enabling cross-session audit trails and the `kafka_consumer_offsets` table for Kafka offset tracking. pgAdmin at `http://localhost:5050` provides a browser-based query interface.
+
+**Microservices with event-driven notification.** In Kubernetes, the API layer is split into five services behind an API gateway. Orders and payments services publish Kafka events and respond to HTTP immediately — they never write to `event_log`. The notification service is the sole Kafka consumer; it subscribes to all five topics and writes every consumed event to `event_log`. The events service reads `event_log` for the UI feed. This strict ownership means no service shares a write path to `event_log`, eliminating coupling without sagas. `mock-server.js` replicates the full behaviour in a single process for local dev and CI.
+
+**Kafka serialisation to avoid partition rebalancing.** The `kafka` and `integration` Playwright projects run with `workers: 1` so that concurrent consumer groups under parallel workers can't trigger broker-side partition rebalancing, which caused 15–20 s timeouts in earlier runs.
+
 **Tag-based execution.** `@smoke` and `@regression` tags let the pipeline choose the right depth for each stage without maintaining separate config files.
 
 ---
@@ -464,12 +567,22 @@ npm run clean
 3. Register it in `tests/e2e/fixtures/pages.fixture.ts`.
 4. Write a new spec in `tests/e2e/<name>.e2e.spec.ts`.
 
-### Add a new mock server endpoint
+### Add a new API resource (both modes)
 
-1. Add the route handler in `mock-server.js` following the existing pattern (method + path matching, JSON response, `publishEvent()` call).
-2. Add the hook call to `ui/src/hooks/use<Resource>.ts`.
-3. Update the UI component to expose the action.
-4. Update the API reference table in this README.
+**Local dev (monolith):**
+1. Add the table to `db/init.sql` and to `initDB()` in `mock-server.js` (`CREATE TABLE IF NOT EXISTS`).
+2. Add the route handler in `mock-server.js` following the existing pattern (`pool.query()` + `publish()`).
+
+**Microservices (K8s / dev:all):**
+1. Create a new service directory under `services/<resource>/` with `index.js`, `Dockerfile`, and a K8s manifest under `k8s/`.
+2. Register the new service URL in `gateway/index.js` → `SERVICES` and add a `routeTo()` case.
+3. Add the service URL to `k8s/01-configmap.yaml`.
+4. Add the notification service `subscribe()` topic list if the new service publishes events.
+
+**Shared:**
+1. Add the hook to `ui/src/hooks/use<Resource>.ts`.
+2. Update the UI component to expose the action.
+3. Update the API reference table in this README.
 
 ---
 

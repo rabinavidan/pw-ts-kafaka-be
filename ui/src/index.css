@@ -336,6 +336,14 @@ tr.row-selected:hover td { background: rgba(59,130,246,.11); }
 @keyframes slideIn  { from{transform:translateX(-8px);opacity:0} to{transform:translateX(0);opacity:1} }
 @keyframes slideInR { from{transform:translateX(16px);opacity:0} to{transform:translateX(0);opacity:1} }
 
+/* ── Html viewer (iframe tabs) ───────────────────────── */
+.html-tab-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+.html-viewer {
+  width: 100%; flex: 1;
+  border: none; display: block;
+}
+
 /* ── InfraPanel ──────────────────────────────────────── */
 .infra-panel { display: flex; flex-direction: column; gap: 24px; }
 
@@ -388,6 +396,39 @@ tr.row-selected:hover td { background: rgba(59,130,246,.11); }
   font-size: 10px; color: var(--muted);
   text-transform: uppercase; letter-spacing: .5px;
 }
+/* ── K8s cluster banner ── */
+.k8s-banner {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px; border-radius: 9px;
+  background: rgba(59,130,246,.05); border: 1px solid rgba(59,130,246,.2);
+  font-size: 12px;
+}
+.k8s-banner-title { font-weight: 700; color: #60a5fa; }
+.k8s-banner-pill {
+  padding: 2px 8px; border-radius: 99px; font-size: 11px;
+  background: rgba(59,130,246,.1); border: 1px solid rgba(59,130,246,.25); color: #93c5fd;
+  font-family: ui-monospace, monospace;
+}
+.k8s-banner-sep { flex: 1; }
+.k8s-node { font-size: 11px; font-family: ui-monospace, monospace; padding: 2px 8px;
+  border-radius: 5px; border: 1px solid; }
+.k8s-node em { font-style: normal; opacity: .6; margin-left: 4px; }
+.k8s-node-cp    { color: #64748b; border-color: #1a2d47; }
+.k8s-node-infra { color: #f59e0b; border-color: rgba(245,158,11,.3); background: rgba(245,158,11,.06); }
+.k8s-node-app   { color: #3b82f6; border-color: rgba(59,130,246,.3);  background: rgba(59,130,246,.06); }
+
+/* ── Service card K8s row ── */
+.svc-k8s {
+  display: flex; align-items: flex-start; gap: 5px;
+  padding: 5px 8px; border-radius: 6px;
+  background: rgba(59,130,246,.05); border: 1px solid rgba(59,130,246,.15);
+  margin-bottom: 5px;
+}
+.svc-k8s-icon { font-size: 11px; line-height: 1.5; flex-shrink: 0; color: #60a5fa; }
+.svc-k8s-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.svc-k8s-resource { font-size: 10px; font-family: ui-monospace, monospace; color: #60a5fa; }
+.svc-k8s-node     { font-size: 10px; font-family: ui-monospace, monospace; color: var(--muted); }
+
 .svc-name  { font-size: 13px; font-weight: 700; margin-bottom: 2px; }
 .svc-port  { font-size: 11px; font-family: ui-monospace, monospace; color: var(--muted); margin-bottom: 6px; }
 .svc-desc  { font-size: 11px; color: var(--muted); line-height: 1.4; margin-bottom: 8px; }

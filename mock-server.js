@@ -1,47 +1,114 @@
-// Stateful mock API server with Kafka event publishing — no extra dependencies
 require('dotenv').config();
 const http = require('http');
 const { randomUUID } = require('crypto');
 const { Kafka } = require('kafkajs');
+const { Pool } = require('pg');
 
 const PORT      = process.env.PORT || 3000;
 const BROKERS   = (process.env.KAFKA_BROKERS || 'localhost:9092').split(',').map(s => s.trim());
 const startTime = Date.now() - 1000;
 
-// ── Kafka producer (fire-and-forget, non-blocking) ────────────────
-const kafka    = new Kafka({ clientId: 'mock-server', brokers: BROKERS, logCreator: () => () => {} });
-const producer = kafka.producer({ allowAutoTopicCreation: true });
+// ── PostgreSQL pool ───────────────────────────────────────────────
+const pool = new Pool({
+  host:     process.env.PGHOST     || 'localhost',
+  port:     parseInt(process.env.PGPORT || '5432'),
+  database: process.env.PGDATABASE || 'mockdb',
+  user:     process.env.PGUSER     || 'mockuser',
+  password: process.env.PGPASSWORD || 'mockpass',
+});
 
-let producerReady = false;
+let dbReady = false;
 
-function startServer() {
-  server.listen(PORT, () => {
-    console.log(`Mock API server listening on http://localhost:${PORT}`);
-  });
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id         VARCHAR(36)   PRIMARY KEY,
+      user_id    VARCHAR(255)  NOT NULL,
+      status     VARCHAR(50)   NOT NULL DEFAULT 'created',
+      amount     NUMERIC(12,2) NOT NULL,
+      currency   VARCHAR(10)   NOT NULL DEFAULT 'USD',
+      items      JSONB         NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id         VARCHAR(36)   PRIMARY KEY,
+      order_id   VARCHAR(36)   NOT NULL,
+      status     VARCHAR(50)   NOT NULL DEFAULT 'pending',
+      amount     NUMERIC(12,2) NOT NULL,
+      currency   VARCHAR(10)   NOT NULL DEFAULT 'USD',
+      method     VARCHAR(50)   NOT NULL DEFAULT 'credit_card',
+      created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS event_log (
+      id         VARCHAR(36)  PRIMARY KEY,
+      topic      VARCHAR(255) NOT NULL,
+      key        VARCHAR(255),
+      event_type VARCHAR(255) NOT NULL,
+      payload    JSONB        NOT NULL,
+      created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS kafka_consumer_offsets (
+      consumer_group   VARCHAR(255) NOT NULL,
+      topic            VARCHAR(255) NOT NULL,
+      partition        INTEGER      NOT NULL,
+      committed_offset BIGINT       NOT NULL DEFAULT 0,
+      updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (consumer_group, topic, partition)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders (status)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments (order_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_created ON event_log (created_at DESC)`);
+  dbReady = true;
+  console.log('[mock-server] Database ready');
 }
 
-producer.connect()
-  .then(() => {
-    producerReady = true;
-    console.log('[mock-server] Kafka producer connected');
-    startServer();
-  })
-  .catch(err => {
-    console.warn('[mock-server] Kafka unavailable, events will not be published:', err.message);
-    startServer();
-  });
+// ── Row mappers ───────────────────────────────────────────────────
+function rowToOrder(r) {
+  return {
+    id:        r.id,
+    userId:    r.user_id,
+    status:    r.status,
+    amount:    parseFloat(r.amount),
+    currency:  r.currency,
+    items:     r.items,
+    createdAt: r.created_at.toISOString(),
+    updatedAt: r.updated_at.toISOString(),
+  };
+}
+
+function rowToPayment(r) {
+  return {
+    id:        r.id,
+    orderId:   r.order_id,
+    status:    r.status,
+    amount:    parseFloat(r.amount),
+    currency:  r.currency,
+    method:    r.method,
+    createdAt: r.created_at.toISOString(),
+    updatedAt: r.updated_at ? r.updated_at.toISOString() : undefined,
+  };
+}
+
+// ── Kafka producer ────────────────────────────────────────────────
+const kafka    = new Kafka({ clientId: 'mock-server', brokers: BROKERS, logCreator: () => () => {} });
+const producer = kafka.producer({ allowAutoTopicCreation: true });
+let producerReady = false;
 
 async function publish(topic, key, value, headers = {}) {
-  // Always log for the UI event feed, regardless of Kafka availability
-  eventLog.push({
-    id:        randomUUID(),
-    topic,
-    key,
-    eventType: (headers['event-type'] || 'unknown').toString(),
-    payload:   value,
-    timestamp: new Date().toISOString(),
-  });
-  if (eventLog.length > 200) eventLog.splice(0, eventLog.length - 200);
+  // Persist every event to the DB event log
+  pool.query(
+    `INSERT INTO event_log (id, topic, key, event_type, payload) VALUES ($1, $2, $3, $4, $5)`,
+    [randomUUID(), topic, key, (headers['event-type'] || 'unknown').toString(), value]
+  ).catch(err => console.warn('[mock-server] event_log insert failed:', err.message));
 
   if (!producerReady) return;
   try {
@@ -53,12 +120,6 @@ async function publish(topic, key, value, headers = {}) {
     console.warn(`[mock-server] Failed to publish to ${topic}:`, err.message);
   }
 }
-
-// ── In-memory stores ──────────────────────────────────────────────
-const orders        = new Map(); // id → Order
-const payments      = new Map(); // id → Payment
-const orderPayments = new Map(); // orderId → paymentId
-const eventLog      = [];        // last 200 published events (for UI feed)
 
 // ── HTTP helpers ──────────────────────────────────────────────────
 function send(res, status, data) {
@@ -85,13 +146,22 @@ const server = http.createServer(async (req, res) => {
 
   // ── Health ────────────────────────────────────────────────────
   if (method === 'GET' && path === '/health') {
+    let dbLatency = -1;
+    let dbStatus  = 'down';
+    try {
+      const t0 = Date.now();
+      await pool.query('SELECT 1');
+      dbLatency = Date.now() - t0;
+      dbStatus  = 'up';
+    } catch {}
+
     return send(res, 200, {
-      status: 'healthy',
+      status:  'healthy',
       version: '1.0.0',
-      uptime: Math.floor((Date.now() - startTime) / 1000),
+      uptime:  Math.floor((Date.now() - startTime) / 1000),
       dependencies: [
-        { name: 'kafka',    status: 'up', latency: 2 },
-        { name: 'database', status: 'up', latency: 1 },
+        { name: 'kafka',    status: producerReady ? 'up' : 'down', latency: 2 },
+        { name: 'database', status: dbStatus, latency: dbLatency },
       ],
     });
   }
@@ -100,10 +170,23 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { status: 'ready' });
   }
 
-  // GET /api/v1/events  (live Kafka event feed for UI)
+  // GET /api/v1/events
   if (method === 'GET' && path === '/api/v1/events') {
     const limit = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 200);
-    return send(res, 200, { events: eventLog.slice(-limit).reverse() });
+    const { rows } = await pool.query(
+      `SELECT id, topic, key, event_type AS "eventType", payload, created_at AS "timestamp"
+         FROM event_log ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+    const events = rows.map(r => ({
+      id:        r.id,
+      topic:     r.topic,
+      key:       r.key,
+      eventType: r.eventType,
+      payload:   r.payload,
+      timestamp: r.timestamp.toISOString(),
+    }));
+    return send(res, 200, { events });
   }
 
   // ── Orders ────────────────────────────────────────────────────
@@ -111,7 +194,6 @@ const server = http.createServer(async (req, res) => {
   // POST /api/v1/orders
   if (method === 'POST' && path === '/api/v1/orders') {
     const body = await readBody(req);
-
     if (!body.userId || body.userId === '') {
       return send(res, 422, { code: 'VALIDATION_ERROR', message: 'userId is required' });
     }
@@ -119,104 +201,104 @@ const server = http.createServer(async (req, res) => {
       return send(res, 422, { code: 'VALIDATION_ERROR', message: 'items cannot be empty' });
     }
 
-    const now   = new Date().toISOString();
-    const items = (body.items || []).map(i => ({ ...i, price: 100 }));
+    const items  = (body.items || []).map(i => ({ ...i, price: 100 }));
+    const amount = items.length > 0 ? items.length * 100 : 100;
+    const id     = randomUUID();
+    const now    = new Date();
+
+    await pool.query(
+      `INSERT INTO orders (id, user_id, status, amount, currency, items, created_at, updated_at)
+       VALUES ($1, $2, 'created', $3, $4, $5, $6, $6)`,
+      [id, body.userId, amount, body.currency || 'USD', JSON.stringify(items), now]
+    );
+
     const order = {
-      id:        randomUUID(),
-      userId:    body.userId,
-      status:    'created',
-      amount:    items.length > 0 ? items.length * 100 : 100,
-      currency:  body.currency || 'USD',
-      items,
-      createdAt: now,
-      updatedAt: now,
+      id, userId: body.userId, status: 'created', amount,
+      currency: body.currency || 'USD', items,
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
-    orders.set(order.id, order);
     send(res, 201, order);
 
-    // Publish OrderEvent
     publish('orders', order.id, {
-      orderId:   order.id,
-      userId:    order.userId,
-      status:    'created',
-      amount:    order.amount,
-      currency:  order.currency,
-      items:     order.items,
+      orderId: order.id, userId: order.userId, status: 'created',
+      amount: order.amount, currency: order.currency, items: order.items,
       createdAt: order.createdAt,
     }, { 'event-type': 'order.created' });
 
     return;
   }
 
-  // GET /api/v1/orders  (list + filter)
+  // GET /api/v1/orders
   if (method === 'GET' && path === '/api/v1/orders') {
     const statusFilter = url.searchParams.get('status');
-    const page         = Math.max(1, parseInt(url.searchParams.get('page')     || '1',  10));
-    const pageSize     = Math.max(1, parseInt(url.searchParams.get('pageSize') || '10', 10));
+    const page     = Math.max(1, parseInt(url.searchParams.get('page')     || '1',  10));
+    const pageSize = Math.max(1, parseInt(url.searchParams.get('pageSize') || '10', 10));
 
-    let items = Array.from(orders.values());
-    if (statusFilter) items = items.filter(o => o.status === statusFilter);
+    const countQ = statusFilter
+      ? await pool.query(`SELECT COUNT(*) FROM orders WHERE status = $1`, [statusFilter])
+      : await pool.query(`SELECT COUNT(*) FROM orders`);
+    const total = parseInt(countQ.rows[0].count);
 
-    const start = (page - 1) * pageSize;
+    const offset = (page - 1) * pageSize;
+    const rowsQ  = statusFilter
+      ? await pool.query(
+          `SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+          [statusFilter, pageSize, offset])
+      : await pool.query(
+          `SELECT * FROM orders ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+          [pageSize, offset]);
+
     return send(res, 200, {
-      items:    items.slice(start, start + pageSize),
-      total:    items.length,
+      items:   rowsQ.rows.map(rowToOrder),
+      total,
       page,
       pageSize,
-      hasNext:  start + pageSize < items.length,
+      hasNext: offset + pageSize < total,
     });
   }
 
   // PUT /api/v1/orders/:id/confirm
   const orderConfirm = path.match(/^\/api\/v1\/orders\/([^/]+)\/confirm$/);
   if ((method === 'PUT' || method === 'PATCH') && orderConfirm) {
-    const order = orders.get(orderConfirm[1]);
-    if (!order) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
-    order.status    = 'confirmed';
-    order.updatedAt = new Date().toISOString();
+    const { rows } = await pool.query(
+      `UPDATE orders SET status = 'confirmed', updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [orderConfirm[1]]
+    );
+    if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
+    const order = rowToOrder(rows[0]);
     send(res, 200, order);
-
     publish('orders', order.id, {
-      orderId:   order.id,
-      userId:    order.userId,
-      status:    'confirmed',
-      amount:    order.amount,
-      currency:  order.currency,
-      items:     order.items,
+      orderId: order.id, userId: order.userId, status: 'confirmed',
+      amount: order.amount, currency: order.currency, items: order.items,
       createdAt: order.createdAt,
     }, { 'event-type': 'order.confirmed' });
-
     return;
   }
 
   // PUT /api/v1/orders/:id/cancel
   const orderCancel = path.match(/^\/api\/v1\/orders\/([^/]+)\/cancel$/);
   if ((method === 'PUT' || method === 'PATCH') && orderCancel) {
-    const order = orders.get(orderCancel[1]);
-    if (!order) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
-    order.status    = 'cancelled';
-    order.updatedAt = new Date().toISOString();
+    const { rows } = await pool.query(
+      `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [orderCancel[1]]
+    );
+    if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
+    const order = rowToOrder(rows[0]);
     send(res, 200, order);
-
     publish('orders', order.id, {
-      orderId:   order.id,
-      userId:    order.userId,
-      status:    'cancelled',
-      amount:    order.amount,
-      currency:  order.currency,
-      items:     order.items,
+      orderId: order.id, userId: order.userId, status: 'cancelled',
+      amount: order.amount, currency: order.currency, items: order.items,
       createdAt: order.createdAt,
     }, { 'event-type': 'order.cancelled' });
-
     return;
   }
 
   // GET /api/v1/orders/:id
   const orderById = path.match(/^\/api\/v1\/orders\/([^/]+)$/);
   if (method === 'GET' && orderById) {
-    const order = orders.get(orderById[1]);
-    if (!order) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
-    return send(res, 200, order);
+    const { rows } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [orderById[1]]);
+    if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
+    return send(res, 200, rowToOrder(rows[0]));
   }
 
   // ── Payments ──────────────────────────────────────────────────
@@ -224,63 +306,62 @@ const server = http.createServer(async (req, res) => {
   // POST /api/v1/payments
   if (method === 'POST' && path === '/api/v1/payments') {
     const body = await readBody(req);
-
     if (!body.orderId) {
       return send(res, 422, { code: 'VALIDATION_ERROR', message: 'orderId is required' });
     }
 
-    // Simulated failure → route to DLQ
+    // Simulated failure → DLQ
     if (body.simulateFailure) {
-      const order = orders.get(body.orderId);
+      const { rows: orderRows } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [body.orderId]);
+      const order = orderRows[0] ? rowToOrder(orderRows[0]) : { orderId: body.orderId };
       send(res, 201, { id: randomUUID(), orderId: body.orderId, status: 'failed' });
-
       publish('dead-letter-queue', body.orderId, {
-        originalEvent:  order || { orderId: body.orderId },
-        failureReason:  'payment_failed',
-        failedAt:       new Date().toISOString(),
+        originalEvent: order, failureReason: 'payment_failed', failedAt: new Date().toISOString(),
       }, { 'event-type': 'payment.failed', 'original-topic': 'orders' });
-
       return;
     }
 
-    if (orderPayments.has(body.orderId)) {
+    // Duplicate payment guard
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM payments WHERE order_id = $1`, [body.orderId]
+    );
+    if (existing.length) {
       return send(res, 409, { code: 'CONFLICT', message: 'Payment already exists for this order' });
     }
 
-    const order   = orders.get(body.orderId);
-    const payment = {
-      id:          randomUUID(),
-      orderId:     body.orderId,
-      status:      'pending',
-      amount:      body.amount ?? order?.amount ?? 100,
-      currency:    body.currency || order?.currency || 'USD',
-      method:      body.method || 'credit_card',
-      createdAt:   new Date().toISOString(),
-    };
-    payments.set(payment.id, payment);
-    orderPayments.set(body.orderId, payment.id);
-    send(res, 201, payment);
+    const { rows: orderRows } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [body.orderId]);
+    const order   = orderRows[0] ? rowToOrder(orderRows[0]) : null;
+    const id      = randomUUID();
+    const amount  = body.amount ?? order?.amount ?? 100;
+    const currency = body.currency || order?.currency || 'USD';
+    const method  = body.method || 'credit_card';
+    const now     = new Date();
 
+    await pool.query(
+      `INSERT INTO payments (id, order_id, status, amount, currency, method, created_at)
+       VALUES ($1, $2, 'pending', $3, $4, $5, $6)`,
+      [id, body.orderId, amount, currency, method, now]
+    );
+
+    const payment = { id, orderId: body.orderId, status: 'pending', amount, currency, method, createdAt: now.toISOString() };
+    send(res, 201, payment);
     publish('payments', payment.id, {
-      paymentId:   payment.id,
-      orderId:     payment.orderId,
-      status:      'pending',
-      amount:      payment.amount,
-      currency:    payment.currency,
-      method:      payment.method,
+      paymentId: payment.id, orderId: payment.orderId, status: 'pending',
+      amount: payment.amount, currency: payment.currency, method: payment.method,
       processedAt: payment.createdAt,
     }, { 'event-type': 'payment.initiated' });
-
     return;
   }
 
   // PUT /api/v1/payments/:id/process
   const paymentProcess = path.match(/^\/api\/v1\/payments\/([^/]+)\/process$/);
   if ((method === 'PUT' || method === 'PATCH') && paymentProcess) {
-    const payment = payments.get(paymentProcess[1]);
-    if (!payment) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
-    payment.status    = 'processed';
-    payment.updatedAt = new Date().toISOString();
+    const { rows } = await pool.query(
+      `UPDATE payments SET status = 'processed', updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [paymentProcess[1]]
+    );
+    if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
+    const payment = rowToPayment(rows[0]);
     send(res, 200, payment);
     publish('payments', payment.id, {
       paymentId: payment.id, orderId: payment.orderId, status: 'processed',
@@ -293,10 +374,12 @@ const server = http.createServer(async (req, res) => {
   // PUT /api/v1/payments/:id/refund
   const paymentRefund = path.match(/^\/api\/v1\/payments\/([^/]+)\/refund$/);
   if ((method === 'PUT' || method === 'PATCH') && paymentRefund) {
-    const payment = payments.get(paymentRefund[1]);
-    if (!payment) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
-    payment.status    = 'refunded';
-    payment.updatedAt = new Date().toISOString();
+    const { rows } = await pool.query(
+      `UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [paymentRefund[1]]
+    );
+    if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
+    const payment = rowToPayment(rows[0]);
     send(res, 200, payment);
     publish('payments', payment.id, {
       paymentId: payment.id, orderId: payment.orderId, status: 'refunded',
@@ -309,10 +392,12 @@ const server = http.createServer(async (req, res) => {
   // PUT /api/v1/payments/:id/fail
   const paymentFail = path.match(/^\/api\/v1\/payments\/([^/]+)\/fail$/);
   if ((method === 'PUT' || method === 'PATCH') && paymentFail) {
-    const payment = payments.get(paymentFail[1]);
-    if (!payment) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
-    payment.status    = 'failed';
-    payment.updatedAt = new Date().toISOString();
+    const { rows } = await pool.query(
+      `UPDATE payments SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [paymentFail[1]]
+    );
+    if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
+    const payment = rowToPayment(rows[0]);
     send(res, 200, payment);
     publish('dead-letter-queue', payment.id, {
       paymentId: payment.id, orderId: payment.orderId, status: 'failed',
@@ -325,17 +410,53 @@ const server = http.createServer(async (req, res) => {
   // GET /api/v1/payments/:id
   const paymentById = path.match(/^\/api\/v1\/payments\/([^/]+)$/);
   if (method === 'GET' && paymentById) {
-    const payment = payments.get(paymentById[1]);
-    if (!payment) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
-    return send(res, 200, payment);
+    const { rows } = await pool.query(`SELECT * FROM payments WHERE id = $1`, [paymentById[1]]);
+    if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
+    return send(res, 200, rowToPayment(rows[0]));
   }
 
-  // ── 404 fallthrough ───────────────────────────────────────────
+  // DELETE /api/v1/orders/:id
+  const orderDel = path.match(/^\/api\/v1\/orders\/([^/]+)$/);
+  if (method === 'DELETE' && orderDel) {
+    const { rowCount } = await pool.query('DELETE FROM orders WHERE id = $1', [orderDel[1]]);
+    if (!rowCount) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
+    publish('orders', orderDel[1], { eventType: 'order.deleted', orderId: orderDel[1] }, { 'event-type': 'order.deleted' });
+    return send(res, 200, { id: orderDel[1], deleted: true });
+  }
+
+  // DELETE /api/v1/payments/:id
+  const paymentDel = path.match(/^\/api\/v1\/payments\/([^/]+)$/);
+  if (method === 'DELETE' && paymentDel) {
+    const { rowCount } = await pool.query('DELETE FROM payments WHERE id = $1', [paymentDel[1]]);
+    if (!rowCount) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
+    publish('payments', paymentDel[1], { eventType: 'payment.deleted', paymentId: paymentDel[1] }, { 'event-type': 'payment.deleted' });
+    return send(res, 200, { id: paymentDel[1], deleted: true });
+  }
+
   send(res, 404, { code: 'NOT_FOUND', message: `${method} ${path} not found` });
 });
 
-// Graceful shutdown
+// ── Startup ───────────────────────────────────────────────────────
+async function start() {
+  try {
+    await initDB();
+  } catch (err) {
+    console.error('[mock-server] Database init failed:', err.message);
+    process.exit(1);
+  }
+
+  producer.connect()
+    .then(() => { producerReady = true; console.log('[mock-server] Kafka producer connected'); })
+    .catch(err => console.warn('[mock-server] Kafka unavailable, events will not be published:', err.message));
+
+  server.listen(PORT, () => console.log(`Mock API server listening on http://localhost:${PORT}`));
+}
+
+start();
+
+// ── Graceful shutdown ─────────────────────────────────────────────
 process.on('SIGTERM', async () => {
   await producer.disconnect().catch(() => {});
+  await pool.end().catch(() => {});
   server.close();
 });

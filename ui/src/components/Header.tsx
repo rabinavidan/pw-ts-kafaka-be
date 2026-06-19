@@ -1,6 +1,6 @@
 import type { HealthStatus } from '../types';
 
-type Tab = 'infra' | 'orders' | 'payments';
+type Tab = 'infra' | 'orders' | 'payments' | 'dataflow' | 'lifecycle' | 'testreport';
 
 interface Props {
   tab: Tab;
@@ -42,6 +42,30 @@ export function Header({ tab, onTabChange, health }: Props) {
           data-testid="nav-tab-payments"
         >
           Payments
+        </button>
+
+        <span style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+        <button
+          className={`nav-tab ${tab === 'dataflow' ? 'active' : ''}`}
+          onClick={() => onTabChange('dataflow')}
+          data-testid="nav-tab-dataflow"
+        >
+          Data Flow
+        </button>
+        <button
+          className={`nav-tab ${tab === 'lifecycle' ? 'active' : ''}`}
+          onClick={() => onTabChange('lifecycle')}
+          data-testid="nav-tab-lifecycle"
+        >
+          Lifecycle
+        </button>
+        <button
+          className={`nav-tab ${tab === 'testreport' ? 'active' : ''}`}
+          onClick={() => onTabChange('testreport')}
+          data-testid="nav-tab-testreport"
+        >
+          Test Report
         </button>
       </nav>
 

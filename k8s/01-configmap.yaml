@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-config
+  namespace: pw-kafka-test
+data:
+  KAFKA_BROKERS: "kafka-svc:29092"
+  PORT: "3000"
+  # External NodePort address for Playwright tests running on the host
+  KAFKA_BROKERS_EXTERNAL: "172.19.0.3:30092"
+  MOCK_SERVER_EXTERNAL: "http://172.19.0.3:30300"
+  # PostgreSQL (internal cluster DNS)
+  PGHOST: "postgres-svc"
+  PGPORT: "5432"
+  PGDATABASE: "mockdb"
+  PGUSER: "mockuser"
+  # Microservice internal URLs (used by gateway)
+  ORDERS_SERVICE_URL: "http://orders-svc:3001"
+  PAYMENTS_SERVICE_URL: "http://payments-svc:3002"
+  EVENTS_SERVICE_URL: "http://events-svc:3003"
+  NOTIFICATIONS_SERVICE_URL: "http://notification-service:3004"

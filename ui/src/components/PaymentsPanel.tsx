@@ -19,7 +19,7 @@ function randomPaymentPayload() {
 }
 
 export function PaymentsPanel({ onToast }: Props) {
-  const { payments, create, process, refund, fail } = usePayments();
+  const { payments, create, process, refund, fail, remove, removeMany } = usePayments();
   const [showModal, setShowModal]   = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [bulking, setBulking]           = useState(false);
@@ -34,14 +34,14 @@ export function PaymentsPanel({ onToast }: Props) {
   const [bulkActionRunning, setBulkRunning] = useState(false);
 
   const visible         = filter === 'all' ? payments : payments.filter(p => p.status === filter);
-  const actionable      = visible.filter(p => p.status === 'pending');
-  const allSelected     = actionable.length > 0 && actionable.every(p => selected.has(p.id));
-  const someSelected    = actionable.some(p => selected.has(p.id));
+  const allSelected     = visible.length > 0 && visible.every(p => selected.has(p.id));
+  const someSelected    = visible.some(p => selected.has(p.id));
   const selectedPending = visible.filter(p => selected.has(p.id) && p.status === 'pending');
+  const selectedAny     = visible.filter(p => selected.has(p.id));
   const selCount        = selected.size;
 
   function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(actionable.map(p => p.id)));
+    setSelected(allSelected ? new Set() : new Set(visible.map(p => p.id)));
   }
 
   function toggleRow(id: string) {
@@ -90,6 +90,24 @@ export function PaymentsPanel({ onToast }: Props) {
     }
     setBulking(false);
     onToast('success', `${created}/10 payments created`);
+  }
+
+  // ── Delete ───────────────────────────────────────────
+  async function handleDelete(id: string) {
+    try { await remove(id); onToast('success', 'Payment deleted'); }
+    catch { onToast('error', 'Failed to delete payment'); }
+  }
+
+  async function handleBulkDelete() {
+    const targets = selectedAny;
+    if (targets.length === 0) return;
+    setBulkRunning(true);
+    setBulkLabel(`Deleting 0/${targets.length}…`);
+    const count = await removeMany(targets.map(p => p.id));
+    setBulkRunning(false);
+    setBulkLabel('');
+    clearSelection();
+    onToast('success', `${count}/${targets.length} payments deleted`);
   }
 
   // ── Single create ─────────────────────────────────────────
@@ -197,6 +215,15 @@ export function PaymentsPanel({ onToast }: Props) {
                 >
                   ✕ Failed {selectedPending.length > 0 && `(${selectedPending.length})`}
                 </button>
+                <button
+                  className="btn btn-sm"
+                  style={{ background: 'rgba(239,68,68,.12)', color: '#f87171', border: '1px solid rgba(239,68,68,.25)' }}
+                  disabled={selectedAny.length === 0}
+                  onClick={handleBulkDelete}
+                  data-testid="btn-bulk-delete-payments"
+                >
+                  🗑 Delete {selectedAny.length > 0 && `(${selectedAny.length})`}
+                </button>
               </>
             )}
           </div>
@@ -239,31 +266,29 @@ export function PaymentsPanel({ onToast }: Props) {
                 <th>Amount</th>
                 <th>Status</th>
                 <th>Created</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
               {visible.map(p => {
-                const isSelected   = selected.has(p.id);
-                const isActionable = p.status === 'pending';
+                const isSelected = selected.has(p.id);
                 return (
                   <tr
                     key={p.id}
                     className={isSelected ? 'row-selected' : ''}
-                    onClick={isActionable ? () => toggleRow(p.id) : undefined}
-                    style={isActionable ? { cursor: 'pointer' } : undefined}
+                    onClick={() => toggleRow(p.id)}
+                    style={{ cursor: 'pointer' }}
                     data-testid={`payment-row-${p.id}`}
                     data-payment-status={p.status}
                   >
                     <td onClick={e => e.stopPropagation()}>
-                      {isActionable && (
-                        <input
-                          type="checkbox"
-                          className="row-cb"
-                          checked={isSelected}
-                          onChange={() => toggleRow(p.id)}
-                          data-testid={`payment-row-cb-${p.id}`}
-                        />
-                      )}
+                      <input
+                        type="checkbox"
+                        className="row-cb"
+                        checked={isSelected}
+                        onChange={() => toggleRow(p.id)}
+                        data-testid={`payment-row-cb-${p.id}`}
+                      />
                     </td>
                     <td><span className="mono" title={p.id}>{p.id.slice(0, 8)}…</span></td>
                     <td><span className="mono" title={p.orderId}>{p.orderId.slice(0, 8)}…</span></td>
@@ -271,6 +296,15 @@ export function PaymentsPanel({ onToast }: Props) {
                     <td className="fw600">${p.amount} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{p.currency}</span></td>
                     <td><span className={`badge badge-${p.status}`} data-testid={`payment-status-${p.id}`}>{p.status}</span></td>
                     <td style={{ fontSize: 12, color: 'var(--muted)' }}>{new Date(p.createdAt).toLocaleTimeString()}</td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <button
+                        className="btn btn-sm"
+                        style={{ background: 'rgba(239,68,68,.08)', color: '#f87171', border: '1px solid rgba(239,68,68,.2)' }}
+                        title="Delete"
+                        onClick={() => handleDelete(p.id)}
+                        data-testid={`btn-delete-payment-${p.id}`}
+                      >🗑</button>
+                    </td>
                   </tr>
                 );
               })}

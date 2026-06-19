@@ -48,11 +48,13 @@ export default defineConfig({
       name: 'kafka',
       testDir: './tests/kafka',
       timeout: 90_000,
+      workers: 1,   // serialise Kafka tests to avoid rebalance timeouts with concurrent consumer groups
     },
     {
       name: 'integration',
       testDir: './tests/integration',
       timeout: 120_000,
+      workers: 1,   // serialise to prevent partition rebalancing under concurrent load
     },
   ],
 

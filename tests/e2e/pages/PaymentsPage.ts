@@ -14,6 +14,7 @@ export class PaymentsPage {
   readonly btnBulkProcess:   Locator;
   readonly btnBulkRefund:    Locator;
   readonly btnBulkFail:      Locator;
+  readonly btnBulkDelete:    Locator;
   readonly btnDeselectAll:   Locator;
   // Modal
   readonly modal:            Locator;
@@ -39,6 +40,7 @@ export class PaymentsPage {
     this.btnBulkProcess    = page.getByTestId('btn-bulk-process');
     this.btnBulkRefund     = page.getByTestId('btn-bulk-refund');
     this.btnBulkFail       = page.getByTestId('btn-bulk-fail');
+    this.btnBulkDelete     = page.getByTestId('btn-bulk-delete-payments');
     this.btnDeselectAll    = page.getByTestId('btn-deselect-all');
     this.modal             = page.getByTestId('modal-new-payment');
     this.modalClose        = page.getByTestId('btn-modal-close');
@@ -54,9 +56,10 @@ export class PaymentsPage {
     return this.page.getByTestId(`filter-pill-${status}`);
   }
 
-  paymentRow(id: string)   { return this.page.getByTestId(`payment-row-${id}`); }
-  paymentRowCb(id: string) { return this.page.getByTestId(`payment-row-cb-${id}`); }
-  paymentStatus(id: string){ return this.page.getByTestId(`payment-status-${id}`); }
+  paymentRow(id: string)    { return this.page.getByTestId(`payment-row-${id}`); }
+  paymentRowCb(id: string)  { return this.page.getByTestId(`payment-row-cb-${id}`); }
+  paymentStatus(id: string) { return this.page.getByTestId(`payment-status-${id}`); }
+  btnDeletePayment(id: string) { return this.page.getByTestId(`btn-delete-payment-${id}`); }
 
   async openNewPaymentModal() {
     await this.btnNewPayment.click();
