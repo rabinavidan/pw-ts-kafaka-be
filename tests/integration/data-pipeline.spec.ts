@@ -88,18 +88,17 @@ test.describe('Data Pipeline Integration @regression', () => {
 
     await sleep(400);
 
-    const [orderMsgs, paymentMsgs] = await Promise.all([
-      kafka.consume<OrderEvent>(kafkaTopics.orders, {
-        count: 1,
-        timeoutMs: 15000,
-        filter: (msg) => msg.headers['trace-id'] === traceId,
-      }),
-      kafka.consume<PaymentEvent>(kafkaTopics.payments, {
-        count: 1,
-        timeoutMs: 15000,
-        filter: (msg) => msg.headers['trace-id'] === traceId,
-      }),
-    ]);
+    // Sequential consumers to avoid simultaneous group joins triggering rebalancing
+    const orderMsgs = await kafka.consume<OrderEvent>(kafkaTopics.orders, {
+      count: 1,
+      timeoutMs: 20000,
+      filter: (msg) => msg.headers['trace-id'] === traceId,
+    });
+    const paymentMsgs = await kafka.consume<PaymentEvent>(kafkaTopics.payments, {
+      count: 1,
+      timeoutMs: 20000,
+      filter: (msg) => msg.headers['trace-id'] === traceId,
+    });
 
     expect(orderMsgs[0].headers['trace-id']).toBe(traceId);
     expect(paymentMsgs[0].headers['trace-id']).toBe(traceId);

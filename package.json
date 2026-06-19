@@ -5,6 +5,7 @@
   "scripts": {
     "test": "playwright test",
     "test:api": "playwright test tests/api/",
+    "test:microservices": "playwright test --project=microservices",
     "test:kafka": "playwright test tests/kafka/",
     "test:integration": "playwright test tests/integration/",
     "test:smoke": "playwright test --grep @smoke",

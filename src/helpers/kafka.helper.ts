@@ -108,7 +108,7 @@ export class KafkaHelper {
       },
     });
 
-    await waitUntil(() => Promise.resolve(collected.length >= count || Date.now() > deadline), timeoutMs, 200);
+    await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs, 200);
     await consumer.disconnect();
 
     logger.info(`Consumed ${collected.length} messages from ${topic}`);

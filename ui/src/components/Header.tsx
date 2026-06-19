@@ -1,6 +1,6 @@
 import type { HealthStatus } from '../types';
 
-type Tab = 'infra' | 'orders' | 'payments' | 'dataflow' | 'lifecycle' | 'testreport';
+type Tab = 'infra' | 'orders' | 'payments' | 'dataflow' | 'lifecycle' | 'testreport' | 'svctest';
 
 interface Props {
   tab: Tab;
@@ -66,6 +66,16 @@ export function Header({ tab, onTabChange, health }: Props) {
           data-testid="nav-tab-testreport"
         >
           Test Report
+        </button>
+
+        <span style={{ width: 1, height: 18, background: 'var(--border)', flexShrink: 0 }} />
+
+        <button
+          className={`nav-tab ${tab === 'svctest' ? 'active' : ''}`}
+          onClick={() => onTabChange('svctest')}
+          data-testid="nav-tab-svctest"
+        >
+          Svc Tests
         </button>
       </nav>
 

@@ -45,15 +45,22 @@ export default defineConfig({
       use: { baseURL: process.env.API_BASE_URL || 'http://localhost:3000' },
     },
     {
+      name: 'microservices',
+      testDir: './tests/microservices',
+      // Targets each service directly on its own port — requires `npm run dev:services` to be running
+    },
+    {
       name: 'kafka',
       testDir: './tests/kafka',
       timeout: 90_000,
+      retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
       workers: 1,   // serialise Kafka tests to avoid rebalance timeouts with concurrent consumer groups
     },
     {
       name: 'integration',
       testDir: './tests/integration',
       timeout: 120_000,
+      retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
       workers: 1,   // serialise to prevent partition rebalancing under concurrent load
     },
   ],

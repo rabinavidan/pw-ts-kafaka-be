@@ -5,7 +5,7 @@ import { logger } from '../utils/logger';
 import { retry } from '../utils/retry';
 
 export class ApiHelper {
-  constructor(private readonly request: APIRequestContext) {}
+  constructor(private readonly request: APIRequestContext, private readonly baseUrlOverride?: string) {}
 
   async get<T>(path: string, params?: Record<string, string>): Promise<ApiResponse<T>> {
     const url = this.buildUrl(path, params);
@@ -86,7 +86,7 @@ export class ApiHelper {
   }
 
   private buildUrl(path: string, params?: Record<string, string>): string {
-    const base = apiConfig.baseUrl.replace(/\/$/, '');
+    const base = (this.baseUrlOverride || apiConfig.baseUrl).replace(/\/$/, '');
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const url = `${base}${normalizedPath}`;
 

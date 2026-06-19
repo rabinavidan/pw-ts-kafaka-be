@@ -1,6 +1,9 @@
 require('dotenv').config();
 const http = require('http');
 const { randomUUID } = require('crypto');
+const { promisify } = require('util');
+const { exec: execRaw } = require('child_process');
+const execAsync = promisify(execRaw);
 const { Kafka } = require('kafkajs');
 const { Pool } = require('pg');
 
@@ -136,6 +139,76 @@ function readBody(req) {
       catch { resolve({}); }
     });
   });
+}
+
+// ── Microservice health probe ─────────────────────────────────────
+async function checkServiceHealth(port) {
+  return new Promise((resolve) => {
+    const t0  = Date.now();
+    const req = http.get(`http://localhost:${port}/health`, { timeout: 2000 }, (r) => {
+      let data = '';
+      r.on('data', d => (data += d));
+      r.on('end', () => {
+        try { resolve({ status: 'up', latency: Date.now() - t0, detail: JSON.parse(data) }); }
+        catch { resolve({ status: 'up', latency: Date.now() - t0, detail: null }); }
+      });
+    });
+    req.on('error',   () => resolve({ status: 'down', latency: -1, detail: null }));
+    req.on('timeout', () => { req.destroy(); resolve({ status: 'down', latency: -1, detail: null }); });
+  });
+}
+
+// ── Playwright result transformer ─────────────────────────────────
+function collectSpecs(suite, group, acc) {
+  for (const spec of suite.specs || []) {
+    const testRun = spec.tests?.[0];
+    const result  = testRun?.results?.[0];
+    acc.push({
+      title:    spec.title,
+      group,
+      status:   result?.status === 'passed' ? 'passed' : 'failed',
+      duration: result?.duration || 0,
+      error:    result?.error?.message || null,
+    });
+  }
+  for (const child of suite.suites || []) collectSpecs(child, child.title, acc);
+}
+
+function transformPwResults(raw) {
+  const services = [];
+  for (const fileSuite of raw.suites || []) {
+    for (const svcSuite of fileSuite.suites || []) {
+      const tests = [];
+      collectSpecs(svcSuite, svcSuite.title, tests);
+      services.push({
+        name:   svcSuite.title,
+        tests,
+        passed: tests.filter(t => t.status === 'passed').length,
+        failed: tests.filter(t => t.status === 'failed').length,
+      });
+    }
+  }
+  return { services, stats: raw.stats || {} };
+}
+
+function walkAllSpecs(suites, acc) {
+  for (const suite of suites || []) {
+    for (const spec of suite.specs || []) {
+      const testRun = spec.tests?.[0];
+      const result  = testRun?.results?.[0];
+      const project = testRun?.projectName || 'unknown';
+      if (!acc[project]) acc[project] = { name: project, passed: 0, failed: 0 };
+      if (result?.status === 'passed') acc[project].passed++;
+      else acc[project].failed++;
+    }
+    walkAllSpecs(suite.suites, acc);
+  }
+}
+
+function transformAllPwResults(raw) {
+  const acc = {};
+  walkAllSpecs(raw.suites, acc);
+  return { projects: Object.values(acc), stats: raw.stats || {} };
 }
 
 // ── Router ────────────────────────────────────────────────────────
@@ -431,6 +504,54 @@ const server = http.createServer(async (req, res) => {
     if (!rowCount) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     publish('payments', paymentDel[1], { eventType: 'payment.deleted', paymentId: paymentDel[1] }, { 'event-type': 'payment.deleted' });
     return send(res, 200, { id: paymentDel[1], deleted: true });
+  }
+
+  // GET /api/v1/services/health — probe each microservice
+  if (method === 'GET' && path === '/api/v1/services/health') {
+    const defs = [
+      { name: 'orders-service',       port: 3001 },
+      { name: 'payments-service',     port: 3002 },
+      { name: 'events-service',       port: 3003 },
+      { name: 'notification-service', port: 3004 },
+    ];
+    const results = await Promise.all(defs.map(async d => ({ ...d, ...(await checkServiceHealth(d.port)) })));
+    return send(res, 200, { services: results });
+  }
+
+  // POST /api/v1/run-tests/microservices — run Playwright microservice suite
+  if (method === 'POST' && path === '/api/v1/run-tests/microservices') {
+    let stdout = '';
+    try {
+      ({ stdout } = await execAsync(
+        'npx playwright test --project=microservices --reporter=json',
+        { cwd: __dirname, timeout: 120000, maxBuffer: 10 * 1024 * 1024 }
+      ));
+    } catch (e) {
+      stdout = e.stdout || '';
+    }
+    try {
+      return send(res, 200, transformPwResults(JSON.parse(stdout)));
+    } catch {
+      return send(res, 500, { error: 'Failed to parse test output', raw: stdout.slice(0, 500) });
+    }
+  }
+
+  // POST /api/v1/run-tests/all — run entire Playwright test suite
+  if (method === 'POST' && path === '/api/v1/run-tests/all') {
+    let stdout = '';
+    try {
+      ({ stdout } = await execAsync(
+        'npx playwright test --reporter=json',
+        { cwd: __dirname, timeout: 300000, maxBuffer: 50 * 1024 * 1024 }
+      ));
+    } catch (e) {
+      stdout = e.stdout || '';
+    }
+    try {
+      return send(res, 200, transformAllPwResults(JSON.parse(stdout)));
+    } catch {
+      return send(res, 500, { error: 'Failed to parse test output', raw: stdout.slice(0, 500) });
+    }
   }
 
   send(res, 404, { code: 'NOT_FOUND', message: `${method} ${path} not found` });
