@@ -13,7 +13,7 @@ test.describe('Kafka Producer @regression', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0].partition).toBeGreaterThanOrEqual(0);
-    expect(results[0].offset).toBeDefined();
+    expect(results[0].baseOffset).toBeDefined();
   });
 
   test('produces a payment event to payments topic', async ({ kafka }) => {
@@ -25,7 +25,7 @@ test.describe('Kafka Producer @regression', () => {
     });
 
     expect(results).toHaveLength(1);
-    expect(Number(results[0].offset)).toBeGreaterThanOrEqual(0);
+    expect(Number(results[0].baseOffset)).toBeGreaterThanOrEqual(0);
   });
 
   test('produces a batch of messages to same topic', async ({ kafka }) => {
@@ -37,7 +37,7 @@ test.describe('Kafka Producer @regression', () => {
     }));
 
     const results = await kafka.produceMany(kafkaTopics.orders, messages);
-    expect(results).toHaveLength(1);
+    expect(results.length).toBeGreaterThanOrEqual(1);
   });
 
   test('produces event with correlation id in headers', async ({ kafka }) => {

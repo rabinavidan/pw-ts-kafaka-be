@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments-service
+  namespace: pw-kafka-test
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payments-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: payments-service
+    spec:
+      nodeSelector:
+        role: app              # → desktop-worker2
+      containers:
+        - name: payments-service
+          image: payments-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 3002
+          envFrom:
+            - configMapRef:
+                name: kafka-config
+          env:
+            - name: PAYMENTS_PORT
+              value: "3002"
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: PGPASSWORD
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3002
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3002
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "96Mi"
+              cpu: "80m"
+            limits:
+              memory: "192Mi"
+              cpu: "300m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payments-svc
+  namespace: pw-kafka-test
+  labels:
+    app: payments-service
+spec:
+  selector:
+    app: payments-service
+  type: ClusterIP
+  ports:
+    - port: 3002
+      targetPort: 3002
+      name: http

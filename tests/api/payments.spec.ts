@@ -56,4 +56,41 @@ test.describe('Payments API @regression', () => {
 
     assertErrorResponse(duplicate, 409);
   });
+
+  test('DELETE /payments/:id deletes an existing payment', async ({ api }) => {
+    const order = await api.post<Order>(endpoints.orders, createOrderRequest());
+    assertCreatedResponse(order);
+
+    const payment = await api.post<Payment>(endpoints.payments, {
+      orderId: order.data.id,
+      method: 'credit_card',
+    });
+    assertCreatedResponse(payment);
+
+    const deleted = await api.delete<{ id: string; deleted: boolean }>(`${endpoints.payments}/${payment.data.id}`);
+    assertSuccessResponse(deleted);
+    expect(deleted.data.id).toBe(payment.data.id);
+    expect(deleted.data.deleted).toBe(true);
+  });
+
+  test('DELETE /payments/:id returns 404 for non-existent payment', async ({ api }) => {
+    const response = await api.delete(`${endpoints.payments}/${randomId()}`);
+    assertErrorResponse(response, 404);
+  });
+
+  test('DELETE /payments/:id removed payment no longer accessible via GET', async ({ api }) => {
+    const order = await api.post<Order>(endpoints.orders, createOrderRequest());
+    assertCreatedResponse(order);
+
+    const payment = await api.post<Payment>(endpoints.payments, {
+      orderId: order.data.id,
+      method: 'bank_transfer',
+    });
+    assertCreatedResponse(payment);
+
+    await api.delete(`${endpoints.payments}/${payment.data.id}`);
+
+    const fetched = await api.get(`${endpoints.payments}/${payment.data.id}`);
+    assertErrorResponse(fetched, 404);
+  });
 });

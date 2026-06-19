@@ -77,4 +77,29 @@ test.describe('Orders API @regression', () => {
       expect(order.status).toBe('created');
     }
   });
+
+  test('DELETE /orders/:id deletes an existing order', async ({ api }) => {
+    const created = await api.post<Order>(endpoints.orders, createOrderRequest());
+    assertCreatedResponse(created);
+
+    const deleted = await api.delete<{ id: string; deleted: boolean }>(`${endpoints.orders}/${created.data.id}`);
+    assertSuccessResponse(deleted);
+    expect(deleted.data.id).toBe(created.data.id);
+    expect(deleted.data.deleted).toBe(true);
+  });
+
+  test('DELETE /orders/:id returns 404 for non-existent order', async ({ api }) => {
+    const response = await api.delete(`${endpoints.orders}/${randomId()}`);
+    assertErrorResponse(response, 404);
+  });
+
+  test('DELETE /orders/:id removed order no longer accessible via GET', async ({ api }) => {
+    const created = await api.post<Order>(endpoints.orders, createOrderRequest());
+    assertCreatedResponse(created);
+
+    await api.delete(`${endpoints.orders}/${created.data.id}`);
+
+    const fetched = await api.get(`${endpoints.orders}/${created.data.id}`);
+    assertErrorResponse(fetched, 404);
+  });
 });

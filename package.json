@@ -5,20 +5,31 @@
   "scripts": {
     "test": "playwright test",
     "test:api": "playwright test tests/api/",
+    "test:microservices": "playwright test --project=microservices",
     "test:kafka": "playwright test tests/kafka/",
     "test:integration": "playwright test tests/integration/",
     "test:smoke": "playwright test --grep @smoke",
     "test:regression": "playwright test --grep @regression",
     "test:report": "playwright show-report",
+    "report": "node generate-report.js && open test-report.html",
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",
     "lint:fix": "eslint 'src/**/*.ts' 'tests/**/*.ts' --fix",
     "type-check": "tsc --noEmit",
-    "clean": "rm -rf test-results playwright-report"
+    "ui:install": "npm install --prefix ui",
+    "ui:dev": "npm run dev --prefix ui",
+    "ui:build": "npm run build --prefix ui",
+    "test:ui": "playwright test --config playwright.ui.config.ts",
+    "test:e2e": "playwright test --config playwright.ui.config.ts --project=e2e-orders --project=e2e-payments",
+    "dev": "concurrently \"node mock-server.js\" \"npm run ui:dev\"",
+    "dev:services": "concurrently -n gateway,orders,payments,events,notif \"node gateway/index.js\" \"node services/orders/index.js\" \"node services/payments/index.js\" \"node services/events/index.js\" \"node services/notifications/index.js\"",
+    "dev:all": "concurrently -n gateway,orders,payments,events,notif,ui \"node gateway/index.js\" \"node services/orders/index.js\" \"node services/payments/index.js\" \"node services/events/index.js\" \"node services/notifications/index.js\" \"npm run ui:dev\"",
+    "clean": "rm -rf test-results playwright-report playwright-report-ui"
   },
   "dependencies": {
-    "kafkajs": "^2.2.4",
     "axios": "^1.7.9",
     "dotenv": "^16.4.7",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.21.0",
     "uuid": "^11.0.5",
     "winston": "^3.17.0"
   },
@@ -28,6 +39,7 @@
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.20.0",
     "@typescript-eslint/parser": "^8.20.0",
+    "concurrently": "^10.0.3",
     "eslint": "^9.18.0",
     "typescript": "^5.7.3"
   }

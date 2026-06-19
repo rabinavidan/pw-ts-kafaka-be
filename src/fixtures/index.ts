@@ -1,11 +1,13 @@
 import { test as base, APIRequestContext } from '@playwright/test';
 import { KafkaHelper } from '../helpers/kafka.helper';
 import { ApiHelper } from '../helpers/api.helper';
+import { DbHelper } from '../helpers/db.helper';
 import { logger } from '../utils/logger';
 
 interface TestFixtures {
   kafka: KafkaHelper;
   api: ApiHelper;
+  db: DbHelper;
 }
 
 export const test = base.extend<TestFixtures>({
@@ -23,6 +25,17 @@ export const test = base.extend<TestFixtures>({
   api: async ({ request }: { request: APIRequestContext }, use: (api: ApiHelper) => Promise<void>) => {
     const apiHelper = new ApiHelper(request);
     await use(apiHelper);
+  },
+
+  db: async ({}, use) => {
+    const dbHelper = new DbHelper();
+    await dbHelper.connect();
+    logger.info('DB fixture: connected');
+
+    await use(dbHelper);
+
+    await dbHelper.disconnect();
+    logger.info('DB fixture: disconnected');
   },
 });
 

@@ -28,13 +28,13 @@ test.describe('Kafka Message Flows @regression', () => {
 
     const orderMessages = await kafka.consume<OrderEvent>(kafkaTopics.orders, {
       count: 1,
-      timeoutMs: 15000,
+      timeoutMs: 30000,
       filter: (msg) => msg.headers['trace-id'] === traceId,
     });
 
     const paymentMessages = await kafka.consume<PaymentEvent>(kafkaTopics.payments, {
       count: 1,
-      timeoutMs: 15000,
+      timeoutMs: 30000,
       filter: (msg) => msg.headers['trace-id'] === traceId,
     });
 

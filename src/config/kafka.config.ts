@@ -37,7 +37,7 @@ export const kafkaTopics = {
 
 export const consumerConfig = {
   groupId: process.env.KAFKA_GROUP_ID || 'playwright-test-group',
-  sessionTimeout: 30000,
-  heartbeatInterval: 3000,
-  maxWaitTimeInMs: 5000,
+  sessionTimeout: 45000,
+  heartbeatInterval: 1000,  // frequent heartbeats prevent session expiry during rebalancing
+  maxWaitTimeInMs: 1000,    // short poll wait so messages are delivered quickly
 };
