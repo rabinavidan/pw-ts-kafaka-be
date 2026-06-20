@@ -42,7 +42,7 @@ export function EventFeed() {
               </div>
               <div className="ev-topic" data-testid="event-topic">↪ {ev.topic}</div>
               <div className="ev-key" title={ev.key} data-testid="event-key">
-                {ev.key.length > 28 ? `${ev.key.slice(0, 27)}…` : ev.key}
+                {(ev.key ?? '').length > 28 ? `${ev.key!.slice(0, 27)}…` : (ev.key ?? '—')}
               </div>
               <div className="ev-time" data-testid="event-time">{ago(ev.timestamp)}</div>
             </div>

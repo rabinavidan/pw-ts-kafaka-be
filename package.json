@@ -10,6 +10,7 @@
     "test:integration": "playwright test tests/integration/",
     "test:smoke": "playwright test --grep @smoke",
     "test:regression": "playwright test --grep @regression",
+    "test:db": "playwright test --project=db",
     "test:report": "playwright show-report",
     "report": "node generate-report.js && open test-report.html",
     "lint": "eslint 'src/**/*.ts' 'tests/**/*.ts'",

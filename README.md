@@ -4,8 +4,9 @@ Playwright TypeScript automated test framework for backend APIs, Kafka message f
 
 ## Overview
 
-This framework provides end-to-end test coverage across two layers:
+This framework provides end-to-end test coverage across three layers:
 
+- **DB layer tests** — Pure PostgreSQL tests that hit the database directly with no API or Kafka involvement. Cover all four tables (`orders`, `payments`, `event_log`, `kafka_consumer_offsets`): CRUD, schema constraints, defaults, filters, and upsert semantics.
 - **Backend tests** — REST API contract testing, Kafka producer/consumer flows, and integration pipeline verification against real Kafka brokers (or a mock server locally).
 - **E2E UI tests** — Browser-level tests for the React Orders & Payments dashboard using a Page Object Model (POM) layer backed by `data-testid` locators.
 
@@ -198,6 +199,16 @@ kubectl delete namespace pw-kafka-test
 
 ## Running Tests
 
+### DB layer tests (require PostgreSQL only)
+
+No API server, no Kafka — just a live PostgreSQL connection:
+
+```bash
+npm run test:db
+```
+
+Runs all 47 tests across `orders`, `payments`, `event_log`, and `kafka_consumer_offsets`. Set `PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` in `.env` to target the right database.
+
 ### Backend tests (require Kafka)
 
 ```bash
@@ -212,6 +223,7 @@ npm run test:integration  # End-to-end pipeline tests
 # By tag
 npm run test:smoke        # @smoke tagged tests — fast pre-deploy check
 npm run test:regression   # @regression tagged tests — full coverage
+npm run test:db           # @db tagged tests — pure database layer
 
 # Open HTML report after a run
 npm run test:report
@@ -243,6 +255,7 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 |-----|---------|
 | `@smoke` | Critical path — run before every deploy |
 | `@regression` | Full suite — run on PRs and nightly |
+| `@db` | Pure DB layer — no API or Kafka required |
 
 ---
 
@@ -282,9 +295,10 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 │   │   ├── api.config.ts             # Base URL, headers, endpoint constants
 │   │   └── kafka.config.ts           # Brokers, SASL, SSL, topic names
 │   ├── fixtures/
-│   │   └── index.ts                  # Playwright fixtures: kafka + api per test
+│   │   └── index.ts                  # Playwright fixtures: kafka + api + db per test
 │   ├── helpers/
 │   │   ├── api.helper.ts             # Typed HTTP methods with timing & retry
+│   │   ├── db.helper.ts              # Direct PostgreSQL CRUD + query for all 4 tables
 │   │   └── kafka.helper.ts           # Produce, consume, admin, waitForMessage
 │   ├── models/
 │   │   ├── api.model.ts              # API response & domain interfaces
@@ -296,10 +310,16 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 │       └── retry.ts                  # retry(), sleep(), waitUntil()
 │
 ├── tests/
+│   ├── db/                           # ★ Pure DB layer — no API, no Kafka
+│   │   ├── orders.db.spec.ts         # 13 tests: insert, read, update, delete, filters, constraints, defaults
+│   │   ├── payments.db.spec.ts       # 14 tests: CRUD, lifecycle statuses, multi-payment per order
+│   │   ├── event-log.db.spec.ts      # 10 tests: topic/type/key filters, JSON payload, ordering
+│   │   └── kafka-offsets.db.spec.ts  # 7 tests: upsert, composite PK, multi-partition, multi-topic
 │   ├── api/
 │   │   ├── health.spec.ts            # Health & readiness, SLA assertions
 │   │   ├── orders.spec.ts            # Orders CRUD, pagination, error cases
-│   │   └── payments.spec.ts          # Payment lifecycle, conflict detection
+│   │   ├── payments.spec.ts          # Payment lifecycle, conflict detection
+│   │   └── db-verification.spec.ts   # API action → DB row assertions (cross-layer)
 │   ├── kafka/
 │   │   ├── producer.spec.ts          # Produce single/batch, headers, audit
 │   │   ├── consumer.spec.ts          # Consume with predicate, ordering
@@ -444,7 +464,9 @@ The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and 
 ```
 lint              ui-build
   │                  │
-  └───── test-be ────┘
+  ├───── test-be ────┤
+  │                  │
+  ├───── test-db ────┤
   │                  │
   └──── test-e2e ────┘
               │
@@ -458,12 +480,13 @@ lint              ui-build
 | `lint` | push / PR | ESLint + `tsc --noEmit` |
 | `ui-build` | push / PR | `vite build` — uploads `ui-dist` artifact |
 | `test-be` | after `lint` | Spins up Kafka services, runs `npm test` (40 tests), generates HTML report + job summary |
+| `test-db` | after `lint` | Spins up PostgreSQL 16, applies schema, runs `npm run test:db` (47 tests), generates job summary |
 | `test-e2e` | after `lint` + `ui-build` | Runs `npm run test:e2e` (51 tests) with mock server + Vite via `webServer`, generates job summary |
-| `deploy` | after all three pass, main only | Deploys UI to GitHub Pages, includes BE test report |
+| `deploy` | after all four pass, main only | Deploys UI to GitHub Pages, includes BE test report |
 
 ### Job summaries
 
-Both test jobs write a detailed HTML table to the GitHub Actions step summary via `generate-summary.js`:
+All three test jobs write a detailed HTML table to the GitHub Actions step summary via `generate-summary.js`:
 
 ```bash
 SUMMARY_LABEL="Backend Tests" node generate-summary.js test-results/results.json >> $GITHUB_STEP_SUMMARY
@@ -478,6 +501,8 @@ The summary includes: total / passed / failed / skipped counts, pass rate, and a
 | `be-playwright-report` | Playwright HTML report for backend tests |
 | `be-test-report-html` | Pretty single-file HTML report (`generate-report.js`) |
 | `be-results-json` | `test-results/results.json` for downstream tooling |
+| `db-playwright-report` | Playwright HTML report for DB layer tests |
+| `db-results-json` | `test-results/results.json` from the DB job |
 | `e2e-playwright-report` | Playwright HTML report for E2E tests (with screenshots & video on failure) |
 | `e2e-results-json` | `test-results/ui-results.json` |
 
@@ -488,6 +513,7 @@ The summary includes: total / passed / failed / skipped counts, pass rate, and a
 | Script | Description |
 |--------|-------------|
 | `npm test` | Run all backend tests |
+| `npm run test:db` | Pure DB layer tests (PostgreSQL only — no API, no Kafka) |
 | `npm run test:api` | API tests only |
 | `npm run test:kafka` | Kafka tests only |
 | `npm run test:integration` | Integration tests only |
@@ -520,7 +546,9 @@ npm run clean
 
 ## Key Design Decisions
 
-**Fixtures over global state.** Each test receives a fresh `KafkaHelper` and `ApiHelper` via Playwright fixtures, ensuring isolation and automatic teardown.
+**Separated DB test layer.** `tests/db/` contains pure PostgreSQL tests with zero API or Kafka involvement. `DbHelper` exposes typed methods (`insertOrder`, `updatePaymentStatus`, `upsertKafkaOffset`, etc.) that tests call directly against the database. This isolates schema correctness, constraint enforcement, and default values from the API contract — a bug in one layer does not mask a bug in the other. The `db` Playwright project runs in CI against a dedicated Postgres 16 service with no other dependencies.
+
+**Fixtures over global state.** Each test receives a fresh `KafkaHelper`, `ApiHelper`, and `DbHelper` via Playwright fixtures, ensuring isolation and automatic teardown.
 
 **Predicate-based consumption.** `KafkaHelper.consume()` accepts a `filter` function so tests can target the exact messages they produced without coupling to topic offset state.
 
@@ -541,6 +569,12 @@ npm run clean
 ---
 
 ## Extending the Framework
+
+### Add a new DB table test
+
+1. Add any new typed interfaces (`DbFoo`) and helper methods to `src/helpers/db.helper.ts`.
+2. Create `tests/db/<table>.db.spec.ts` using the `db` fixture — no `api` or `kafka` fixtures needed.
+3. Tag tests with `@db`. Cover: insert + read-back, update, delete, null cases, constraint violations, and any defaults.
 
 ### Add a new API endpoint
 
