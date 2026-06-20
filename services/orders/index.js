@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ override: true });
 const http = require('http');
 const { randomUUID } = require('crypto');
 const { Kafka } = require('kafkajs');

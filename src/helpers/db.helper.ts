@@ -2,7 +2,7 @@ import { Pool, QueryResult } from 'pg';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 
-dotenv.config();
+dotenv.config({ override: true });
 
 export interface DbOrder {
   id: string;
