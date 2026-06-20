@@ -106,14 +106,10 @@ export class KafkaHelper {
       },
     });
 
-    // Wait for partition assignment before starting the message timeout — group join
-    // can take 1-3s and would otherwise eat into the caller's timeoutMs budget.
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Kafka consumer group join timed out')), 15000);
-      consumer.on(consumer.events.GROUP_JOIN, () => { clearTimeout(timer); resolve(); });
-    });
-
-    await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs, 200);
+    // Add a 45s buffer on top of the caller's timeout to absorb consumer group join and
+    // partition assignment delays — these can take 20-30s when multiple projects run concurrently.
+    // The wait exits as soon as messages arrive, so fast runs are unaffected.
+    await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs + 45000, 200);
     await consumer.disconnect();
 
     logger.info(`Consumed ${collected.length} messages from ${topic}`);

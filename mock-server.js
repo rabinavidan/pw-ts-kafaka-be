@@ -67,11 +67,33 @@ async function initDB() {
       PRIMARY KEY (consumer_group, topic, partition)
     )
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders (status)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments (order_id)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_created ON event_log (created_at DESC)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS server_logs (
+      id         VARCHAR(36)  PRIMARY KEY,
+      level      VARCHAR(10)  NOT NULL,
+      source     VARCHAR(100) NOT NULL DEFAULT 'server',
+      message    TEXT         NOT NULL,
+      context    JSONB,
+      created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status       ON orders (status)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_order_id   ON payments (order_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_created   ON event_log (created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_server_logs_created ON server_logs (created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_server_logs_level   ON server_logs (level)`);
   dbReady = true;
   console.log('[mock-server] Database ready');
+}
+
+// ── Server logger ─────────────────────────────────────────────────
+function serverLog(level, source, message, context = null) {
+  console.log(`[${level.toUpperCase()}] [${source}] ${message}`, context || '');
+  if (!dbReady) return;
+  pool.query(
+    `INSERT INTO server_logs (id, level, source, message, context) VALUES ($1, $2, $3, $4, $5)`,
+    [randomUUID(), level, source, message, context ? JSON.stringify(context) : null]
+  ).catch(err => console.warn('[logger] DB write failed:', err.message));
 }
 
 // ── Row mappers ───────────────────────────────────────────────────
@@ -112,28 +134,32 @@ async function connectKafka() {
     await producer.connect();
     producerReady = true;
     if (kafkaReconnectTimer) { clearTimeout(kafkaReconnectTimer); kafkaReconnectTimer = null; }
-    console.log('[mock-server] Kafka producer connected');
+    serverLog('info', 'kafka', 'Kafka producer connected', { brokers: BROKERS });
   } catch (err) {
-    console.warn('[mock-server] Kafka unavailable, retrying in 5s:', err.message);
+    serverLog('warn', 'kafka', `Kafka unavailable, retrying in 5s: ${err.message}`);
     kafkaReconnectTimer = setTimeout(connectKafka, 5000);
   }
 }
 
 async function publish(topic, key, value, headers = {}) {
-  // Persist every event to the DB event log
+  const eventType = (headers['event-type'] || 'unknown').toString();
   pool.query(
     `INSERT INTO event_log (id, topic, key, event_type, payload) VALUES ($1, $2, $3, $4, $5)`,
-    [randomUUID(), topic, key, (headers['event-type'] || 'unknown').toString(), value]
+    [randomUUID(), topic, key, eventType, value]
   ).catch(err => console.warn('[mock-server] event_log insert failed:', err.message));
 
-  if (!producerReady) return;
+  if (!producerReady) {
+    serverLog('warn', 'kafka', `Kafka producer not ready — event dropped`, { topic, key, eventType });
+    return;
+  }
   try {
     await producer.send({
       topic,
       messages: [{ key, value: JSON.stringify(value), headers }],
     });
+    serverLog('info', 'kafka', `Published event to ${topic}`, { topic, key, eventType });
   } catch (err) {
-    console.warn(`[mock-server] Failed to publish to ${topic}:`, err.message);
+    serverLog('error', 'kafka', `Failed to publish to ${topic}: ${err.message}`, { topic, key, eventType });
   }
 }
 
@@ -229,6 +255,17 @@ const server = http.createServer(async (req, res) => {
   const url    = new URL(req.url, `http://localhost:${PORT}`);
   const path   = url.pathname;
   const method = req.method.toUpperCase();
+  const t0     = Date.now();
+
+  const originalEnd = res.end.bind(res);
+  res.end = function(...args) {
+    const duration = Date.now() - t0;
+    const skip = path === '/health' || path === '/ready' || path.startsWith('/api/v1/logs');
+    if (!skip) {
+      serverLog('info', 'http', `${method} ${path} ${res.statusCode}`, { method, path, status: res.statusCode, ms: duration });
+    }
+    return originalEnd(...args);
+  };
 
   // ── Health ────────────────────────────────────────────────────
   if (method === 'GET' && path === '/health') {
@@ -274,6 +311,25 @@ const server = http.createServer(async (req, res) => {
       timestamp: r.timestamp.toISOString(),
     }));
     return send(res, 200, { events });
+  }
+
+  // GET /api/v1/logs
+  if (method === 'GET' && path === '/api/v1/logs') {
+    const limit  = Math.min(parseInt(url.searchParams.get('limit') || '200', 10), 1000);
+    const level  = url.searchParams.get('level');
+    const search = url.searchParams.get('search');
+    const conditions = [];
+    const params = [];
+    if (level && level !== 'all') { params.push(level); conditions.push(`level = $${params.length}`); }
+    if (search) { params.push(`%${search}%`); conditions.push(`message ILIKE $${params.length}`); }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    params.push(limit);
+    const { rows } = await pool.query(
+      `SELECT id, level, source, message, context, created_at AS "timestamp"
+         FROM server_logs ${where} ORDER BY created_at DESC LIMIT $${params.length}`,
+      params
+    );
+    return send(res, 200, { logs: rows.map(r => ({ ...r, timestamp: r.timestamp.toISOString() })) });
   }
 
   // ── Orders ────────────────────────────────────────────────────

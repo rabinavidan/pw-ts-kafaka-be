@@ -6,10 +6,11 @@ import { EventFeed } from './components/EventFeed';
 import { InfraPanel } from './components/InfraPanel';
 import { HtmlViewer } from './components/HtmlViewer';
 import { MicroservicesTestPanel } from './components/MicroservicesTestPanel';
+import { LogsPanel } from './components/LogsPanel';
 import { useHealth } from './hooks/useHealth';
 import type { Toast } from './types';
 
-type Tab = 'infra' | 'orders' | 'payments' | 'dataflow' | 'lifecycle' | 'testreport' | 'svctest';
+type Tab = 'infra' | 'orders' | 'payments' | 'dataflow' | 'lifecycle' | 'testreport' | 'svctest' | 'logs';
 
 export default function App() {
   const [tab, setTab]       = useState<Tab>('orders');
@@ -24,6 +25,7 @@ export default function App() {
 
   const isHtmlTab  = tab === 'dataflow' || tab === 'lifecycle' || tab === 'testreport';
   const isSvcTest  = tab === 'svctest';
+  const isLogsTab  = tab === 'logs';
 
   return (
     <>
@@ -38,6 +40,10 @@ export default function App() {
       ) : isSvcTest ? (
         <div className="app-body" data-testid="app-body" style={{ display: 'block', overflowY: 'auto' }}>
           <MicroservicesTestPanel onToast={addToast} />
+        </div>
+      ) : isLogsTab ? (
+        <div className="app-body" data-testid="app-body" style={{ display: 'block', overflowY: 'auto' }}>
+          <LogsPanel />
         </div>
       ) : (
         <div className="app-body" data-testid="app-body">
