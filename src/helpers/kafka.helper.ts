@@ -86,8 +86,6 @@ export class KafkaHelper {
     await consumer.connect();
     await consumer.subscribe({ topic, fromBeginning: true });
 
-    const deadline = Date.now() + timeoutMs;
-
     await consumer.run({
       eachMessage: async ({ topic: t, partition, message }: EachMessagePayload) => {
         const parsed: ConsumedMessage<T> = {
@@ -106,6 +104,13 @@ export class KafkaHelper {
           collected.push(parsed);
         }
       },
+    });
+
+    // Wait for partition assignment before starting the message timeout — group join
+    // can take 1-3s and would otherwise eat into the caller's timeoutMs budget.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Kafka consumer group join timed out')), 15000);
+      consumer.on(consumer.events.GROUP_JOIN, () => { clearTimeout(timer); resolve(); });
     });
 
     await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs, 200);
