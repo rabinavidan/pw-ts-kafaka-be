@@ -450,6 +450,32 @@ const server = http.createServer(async (req, res) => {
 
   // ── Payments ──────────────────────────────────────────────────
 
+  // GET /api/v1/payments
+  if (method === 'GET' && path === '/api/v1/payments') {
+    const statusFilter = url.searchParams.get('status');
+    const page     = Math.max(1, parseInt(url.searchParams.get('page')     || '1',  10));
+    const pageSize = Math.max(1, parseInt(url.searchParams.get('pageSize') || '50', 10));
+    const offset   = (page - 1) * pageSize;
+
+    const countQ = statusFilter
+      ? await dbQuery('payments', 'COUNT', `SELECT COUNT(*) FROM payments WHERE status = $1`, [statusFilter])
+      : await dbQuery('payments', 'COUNT', `SELECT COUNT(*) FROM payments`);
+    const total = parseInt(countQ.rows[0].count);
+
+    const rowsQ = statusFilter
+      ? await dbQuery('payments', 'SELECT',
+          `SELECT * FROM payments WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+          [statusFilter, pageSize, offset])
+      : await dbQuery('payments', 'SELECT',
+          `SELECT * FROM payments ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+          [pageSize, offset]);
+
+    return send(res, 200, {
+      items: rowsQ.rows.map(rowToPayment),
+      total, page, pageSize, hasNext: offset + pageSize < total,
+    });
+  }
+
   // POST /api/v1/payments
   if (method === 'POST' && path === '/api/v1/payments') {
     const body = await readBody(req);

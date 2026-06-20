@@ -1,9 +1,24 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { api } from '../api/client';
 import type { Payment } from '../types';
 
 export function usePayments() {
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const refresh = useCallback(async (status?: string) => {
+    setLoading(true);
+    try {
+      const q = new URLSearchParams({ pageSize: '200' });
+      if (status) q.set('status', status);
+      const res = await api.get<{ items: Payment[] }>(`/api/v1/payments?${q}`);
+      setPayments(res.items);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
 
   const create = useCallback(async (payload: { orderId: string; method: string; simulateFailure?: boolean }) => {
     const payment = await api.post<Payment>('/api/v1/payments', payload);
@@ -41,5 +56,5 @@ export function usePayments() {
     return count;
   }, []);
 
-  return { payments, create, process, refund, fail, remove, removeMany };
+  return { payments, loading, refresh, create, process, refund, fail, remove, removeMany };
 }
