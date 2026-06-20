@@ -155,7 +155,81 @@ jobs:
           path: test-results/results.json
           retention-days: 30
 
-  # ── 4. E2E tests (UI — Orders & Payments) ────────────────────────
+  # ── 4. DB layer tests (pure PostgreSQL — no API, no Kafka) ─────────
+  test-db:
+    name: DB Layer Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: mockuser
+          POSTGRES_PASSWORD: mockpass
+          POSTGRES_DB: mockdb
+        options: >-
+          --health-cmd "pg_isready -U mockuser -d mockdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Apply DB schema
+        run: psql -h localhost -U mockuser -d mockdb -f db/init.sql
+        env:
+          PGPASSWORD: mockpass
+
+      - name: Run DB layer tests
+        run: npm run test:db
+        env:
+          CI: true
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
+          PORT: 3001
+          API_BASE_URL: http://localhost:3001
+
+      - name: Write job summary
+        if: always()
+        run: node generate-summary.js test-results/results.json >> $GITHUB_STEP_SUMMARY
+        env:
+          SUMMARY_LABEL: DB Layer Tests — orders · payments · event_log · kafka_consumer_offsets
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: db-playwright-report
+          path: playwright-report/
+          retention-days: 30
+
+      - name: Upload results JSON
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: db-results-json
+          path: test-results/results.json
+          retention-days: 30
+
+  # ── 5. E2E tests (UI — Orders & Payments) ────────────────────────
   test-e2e:
     name: E2E Tests (UI)
     runs-on: ubuntu-latest
@@ -205,11 +279,11 @@ jobs:
           path: test-results/ui-results.json
           retention-days: 30
 
-  # ── 5. Deploy to GitHub Pages (main only) ────────────────────────
+  # ── 6. Deploy to GitHub Pages (main only) ────────────────────────
   deploy:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [test-be, test-e2e, ui-build]
+    needs: [test-be, test-db, test-e2e, ui-build]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     permissions:

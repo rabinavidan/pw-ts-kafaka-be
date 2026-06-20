@@ -241,9 +241,11 @@ export function InfraPanel() {
     gateway: 'unknown', orders: 'unknown', payments: 'unknown',
     notifications: 'unknown', events: 'unknown', ui: 'up',
   });
-  const [log,      setLog]      = useState<LogLine[]>([]);
-  const [building, setBuilding] = useState(false);
-  const [built,    setBuilt]    = useState(false);
+  const [log,        setLog]        = useState<LogLine[]>([]);
+  const [building,   setBuilding]   = useState(false);
+  const [built,      setBuilt]      = useState(false);
+  const [dbChecking, setDbChecking] = useState(false);
+  const [dbResult,   setDbResult]   = useState<{ status: string; latency: number; ts: string } | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -282,6 +284,27 @@ export function InfraPanel() {
 
   const addLog = useCallback((text: string, kind: LogLine['kind']) =>
     setLog(prev => [...prev, { id: crypto.randomUUID(), text, kind }]), []);
+
+  const checkDb = useCallback(async () => {
+    if (dbChecking) return;
+    setDbChecking(true);
+    setDbResult(null);
+    try {
+      const h = await api.get<{ status: string; dependencies: { name: string; status: string; latency: number }[] }>('/health');
+      const dep = h.dependencies.find(d => d.name === 'database');
+      const result = { status: dep?.status ?? 'unknown', latency: dep?.latency ?? 0, ts: new Date().toLocaleTimeString() };
+      setDbResult(result);
+      setStatuses(prev => ({ ...prev, postgres: result.status === 'up' ? 'up' : 'down' }));
+      addLog(`🐘 database · ${result.status === 'up' ? `up · ${result.latency}ms latency` : 'down'} · ${result.ts}`, result.status === 'up' ? 'ok' : 'err');
+    } catch {
+      const ts = new Date().toLocaleTimeString();
+      setDbResult({ status: 'error', latency: 0, ts });
+      setStatuses(prev => ({ ...prev, postgres: 'down' }));
+      addLog(`🐘 database · unreachable · ${ts}`, 'err');
+    } finally {
+      setDbChecking(false);
+    }
+  }, [dbChecking, addLog]);
 
   const startBuild = useCallback(() => {
     if (building) return;
@@ -343,15 +366,42 @@ export function InfraPanel() {
               : `${upCount} / ${Object.keys(statuses).length} services running`}
           </div>
         </div>
-        <button
-          className={`btn ${building ? 'btn-ghost' : built ? 'btn-success' : 'btn-primary'} build-btn`}
-          onClick={startBuild}
-          disabled={building}
-        >
-          {building
-            ? <><span className="spin">⟳</span> Deploying…</>
-            : built ? '↺ Redeploy' : '▶  Deploy to K8s'}
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="btn btn-ghost"
+              data-testid="btn-check-db"
+              onClick={checkDb}
+              disabled={dbChecking}
+            >
+              {dbChecking ? <><span className="spin">⟳</span> Checking…</> : '🐘 Check DB'}
+            </button>
+            <button
+              className={`btn ${building ? 'btn-ghost' : built ? 'btn-success' : 'btn-primary'} build-btn`}
+              onClick={startBuild}
+              disabled={building}
+            >
+              {building
+                ? <><span className="spin">⟳</span> Deploying…</>
+                : built ? '↺ Redeploy' : '▶  Deploy to K8s'}
+            </button>
+          </div>
+          {dbResult && (
+            <div data-testid="db-check-result" style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontSize: 11, color: dbResult.status === 'up' ? '#22c55e' : '#ef4444',
+            }}>
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
+                background: dbResult.status === 'up' ? '#22c55e' : '#ef4444',
+                boxShadow: dbResult.status === 'up' ? '0 0 5px #22c55e' : 'none',
+              }} />
+              {dbResult.status === 'up'
+                ? `DB up · ${dbResult.latency}ms · ${dbResult.ts}`
+                : `DB ${dbResult.status} · ${dbResult.ts}`}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── K8s Cluster Banner ── */}

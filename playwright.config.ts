@@ -14,7 +14,7 @@ export default defineConfig({
 
   webServer: {
     command: 'node mock-server.js',
-    port: 3000,
+    port: parseInt(process.env.PORT || '3001'),
     reuseExistingServer: true,
     stdout: 'pipe',
     stderr: 'pipe',
@@ -62,6 +62,11 @@ export default defineConfig({
       timeout: 120_000,
       retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
       workers: 1,   // serialise to prevent partition rebalancing under concurrent load
+    },
+    {
+      name: 'db',
+      testDir: './tests/db',
+      use: { baseURL: process.env.API_BASE_URL || 'http://localhost:3001' },
     },
   ],
 
