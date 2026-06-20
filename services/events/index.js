@@ -1,9 +1,11 @@
 require('dotenv').config();
 const http = require('http');
+const { randomUUID } = require('crypto');
 const { Pool } = require('pg');
 
 const PORT      = process.env.EVENTS_PORT || 3003;
 const startTime = Date.now() - 1000;
+const SVC       = 'events-svc';
 
 const pool = new Pool({
   host: process.env.PGHOST || 'localhost', port: parseInt(process.env.PGPORT || '5432'),
@@ -11,15 +13,61 @@ const pool = new Pool({
   password: process.env.PGPASSWORD || 'mockpass',
 });
 
+let dbReady = false;
+
+function serverLog(level, source, message, context = null) {
+  console.log(`[${level.toUpperCase()}] [${source}] ${message}`, context || '');
+  if (!dbReady) return;
+  pool.query(
+    `INSERT INTO server_logs (id, level, source, message, context) VALUES ($1, $2, $3, $4, $5)`,
+    [randomUUID(), level, source, message, context ? JSON.stringify(context) : null]
+  ).catch(err => console.warn('[logger] DB write failed:', err.message));
+}
+
+async function dbQuery(table, operation, sql, params = []) {
+  const t0 = Date.now();
+  try {
+    const result = await pool.query(sql, params);
+    serverLog('info', 'db', `${operation} on ${table} → ${result.rowCount ?? result.rows.length} row(s)`, {
+      table, operation, rowCount: result.rowCount ?? result.rows.length, ms: Date.now() - t0, svc: SVC,
+    });
+    return result;
+  } catch (err) {
+    serverLog('error', 'db', `${operation} on ${table} failed: ${err.message}`, {
+      table, operation, ms: Date.now() - t0, svc: SVC,
+    });
+    throw err;
+  }
+}
+
 function send(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(data));
+}
+
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS server_logs (
+      id VARCHAR(36) PRIMARY KEY, level VARCHAR(10) NOT NULL,
+      source VARCHAR(100) NOT NULL DEFAULT 'server', message TEXT NOT NULL,
+      context JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`).catch(() => {});
+  dbReady = true;
 }
 
 const server = http.createServer(async (req, res) => {
   const url    = new URL(req.url, `http://localhost:${PORT}`);
   const path   = url.pathname;
   const method = req.method.toUpperCase();
+
+  if (path !== '/health' && path !== '/ready') {
+    const origEnd = res.end.bind(res);
+    res.end = function (body) {
+      serverLog('info', SVC, `${method} ${path} → ${res.statusCode}`, { method, path, status: res.statusCode });
+      res.end = origEnd;
+      return origEnd(body);
+    };
+  }
 
   if (method === 'GET' && path === '/health') {
     let dbStatus = 'down', dbLatency = -1;
@@ -39,11 +87,11 @@ const server = http.createServer(async (req, res) => {
     const topic = url.searchParams.get('topic');
 
     const query = topic
-      ? await pool.query(
+      ? await dbQuery('event_log', 'SELECT',
           `SELECT id, topic, key, event_type AS "eventType", payload, created_at AS "timestamp"
              FROM event_log WHERE topic = $1 ORDER BY created_at DESC LIMIT $2`,
           [topic, limit])
-      : await pool.query(
+      : await dbQuery('event_log', 'SELECT',
           `SELECT id, topic, key, event_type AS "eventType", payload, created_at AS "timestamp"
              FROM event_log ORDER BY created_at DESC LIMIT $1`,
           [limit]);
@@ -58,5 +106,11 @@ const server = http.createServer(async (req, res) => {
   send(res, 404, { code: 'NOT_FOUND', message: `${method} ${path} not found` });
 });
 
-server.listen(PORT, () => console.log(`[events] Listening on http://localhost:${PORT}`));
+async function start() {
+  await initDB();
+  serverLog('info', SVC, 'Database ready');
+  server.listen(PORT, () => serverLog('info', SVC, `Listening on http://localhost:${PORT}`));
+}
+
+start().catch(err => { console.error('[events] Fatal:', err.message); process.exit(1); });
 process.on('SIGTERM', async () => { await pool.end().catch(() => {}); server.close(); });
