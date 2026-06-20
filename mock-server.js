@@ -332,21 +332,31 @@ const server = http.createServer(async (req, res) => {
 
   // GET /api/v1/logs
   if (method === 'GET' && path === '/api/v1/logs') {
-    const limit  = Math.min(parseInt(url.searchParams.get('limit') || '200', 10), 1000);
-    const level  = url.searchParams.get('level');
-    const search = url.searchParams.get('search');
+    const pageSize = Math.min(parseInt(url.searchParams.get('pageSize') || '15', 10), 100);
+    const page     = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
+    const offset   = (page - 1) * pageSize;
+    const level    = url.searchParams.get('level');
+    const search   = url.searchParams.get('search');
     const conditions = [];
     const params = [];
     if (level && level !== 'all') { params.push(level); conditions.push(`level = $${params.length}`); }
-    if (search) { params.push(`%${search}%`); conditions.push(`message ILIKE $${params.length}`); }
+    if (search) { params.push(`%${search}%`); conditions.push(`(message ILIKE $${params.length} OR source ILIKE $${params.length})`); }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    params.push(limit);
+    const countParams = [...params];
+    const { rows: countRows } = await pool.query(
+      `SELECT COUNT(*) FROM server_logs ${where}`, countParams
+    );
+    const total = parseInt(countRows[0].count);
+    params.push(pageSize, offset);
     const { rows } = await pool.query(
       `SELECT id, level, source, message, context, created_at AS "timestamp"
-         FROM server_logs ${where} ORDER BY created_at DESC LIMIT $${params.length}`,
+         FROM server_logs ${where} ORDER BY created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
-    return send(res, 200, { logs: rows.map(r => ({ ...r, timestamp: r.timestamp.toISOString() })) });
+    return send(res, 200, {
+      logs: rows.map(r => ({ ...r, timestamp: r.timestamp.toISOString() })),
+      total, page, pageSize, totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    });
   }
 
   // ── Orders ────────────────────────────────────────────────────

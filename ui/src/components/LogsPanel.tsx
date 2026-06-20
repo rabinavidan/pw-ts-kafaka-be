@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface LogEntry {
   id: string;
@@ -8,6 +8,8 @@ interface LogEntry {
   context: Record<string, unknown> | null;
   timestamp: string;
 }
+
+const PAGE_SIZE = 15;
 
 const LEVEL_COLORS: Record<string, string> = {
   info:  '#3b82f6',
@@ -24,134 +26,124 @@ const LEVEL_BG: Record<string, string> = {
 };
 
 export function LogsPanel() {
-  const [logs, setLogs]           = useState<LogEntry[]>([]);
-  const [level, setLevel]         = useState('all');
-  const [search, setSearch]       = useState('');
-  const [paused, setPaused]       = useState(false);
-  const [expanded, setExpanded]   = useState<Set<string>>(new Set());
-  const [loading, setLoading]     = useState(true);
-  const pausedRef                 = useRef(paused);
-  pausedRef.current               = paused;
+  const [logs, setLogs]         = useState<LogEntry[]>([]);
+  const [level, setLevel]       = useState('all');
+  const [search, setSearch]     = useState('');
+  const [paused, setPaused]     = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loading, setLoading]   = useState(true);
+  const [page, setPage]         = useState(1);
+  const [total, setTotal]       = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
-  const fetchLogs = useCallback(async () => {
-    if (pausedRef.current) return;
+  const fetchLogs = useCallback(async (targetPage = 1, isPoll = false) => {
+    if (isPoll && paused) return;
     try {
-      const params = new URLSearchParams({ limit: '200' });
+      const params = new URLSearchParams({ page: String(targetPage), pageSize: String(PAGE_SIZE) });
       if (level !== 'all') params.set('level', level);
       if (search.trim()) params.set('search', search.trim());
       const res  = await fetch(`/api/v1/logs?${params}`);
       const data = await res.json();
       setLogs(data.logs ?? []);
+      setTotal(data.total ?? 0);
+      setPage(data.page ?? 1);
+      setTotalPages(data.totalPages ?? 1);
     } catch {
       // silently ignore fetch errors
     } finally {
       setLoading(false);
     }
+  }, [level, search, paused]);
+
+  useEffect(() => {
+    setPage(1);
+    fetchLogs(1);
   }, [level, search]);
 
   useEffect(() => {
-    fetchLogs();
-    const id = setInterval(fetchLogs, 3000);
+    const id = setInterval(() => fetchLogs(page, true), 5000);
     return () => clearInterval(id);
-  }, [fetchLogs]);
+  }, [fetchLogs, page]);
 
-  const toggleExpand = (id: string) => {
+  function goToPage(p: number) {
+    setPage(p);
+    fetchLogs(p);
+  }
+
+  function toggleExpand(id: string) {
     setExpanded(prev => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-  };
-
-  const counts = logs.reduce<Record<string, number>>((acc, l) => {
-    acc[l.level] = (acc[l.level] ?? 0) + 1;
-    return acc;
-  }, {});
+  }
 
   return (
-    <div style={{ padding: 20, height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontWeight: 600, fontSize: 14 }}>Server Logs</span>
+    <div data-testid="logs-panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12, height: '100%' }}>
 
-        <div style={{ display: 'flex', gap: 6 }}>
-          {(['all', 'info', 'warn', 'error', 'debug'] as const).map(l => (
-            <button
-              key={l}
-              onClick={() => setLevel(l)}
-              style={{
-                padding: '3px 10px', borderRadius: 4, border: 'none', cursor: 'pointer', fontSize: 12,
-                background: level === l ? (l === 'all' ? 'var(--accent)' : LEVEL_COLORS[l]) : 'var(--surface-2)',
-                color: level === l ? '#fff' : 'var(--text-2)',
-                fontWeight: level === l ? 600 : 400,
-              }}
-            >
-              {l}{l !== 'all' && counts[l] ? ` (${counts[l]})` : ''}
-            </button>
-          ))}
-        </div>
-
-        <input
-          type="text"
-          placeholder="Search messages…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{
-            padding: '4px 10px', borderRadius: 4, border: '1px solid var(--border)',
-            background: 'var(--surface-2)', color: 'var(--text)', fontSize: 12, width: 200,
-          }}
-        />
-
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button
-            onClick={() => setPaused(p => !p)}
+      {/* ── Top bar ── */}
+      <div className="panel-top">
+        <h2 className="panel-title">Server Logs</h2>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="text"
+            placeholder="Search messages or sources…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
             style={{
-              padding: '4px 12px', borderRadius: 4, border: '1px solid var(--border)',
-              background: paused ? 'var(--accent)' : 'var(--surface-2)',
-              color: paused ? '#fff' : 'var(--text-2)', cursor: 'pointer', fontSize: 12,
+              padding: '5px 10px', borderRadius: 6, border: '1px solid var(--border)',
+              background: 'var(--surface-2, var(--surface))', color: 'var(--text)', fontSize: 12, width: 220,
             }}
+          />
+          <button
+            className={`btn btn-sm ${paused ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setPaused(p => !p)}
           >
             {paused ? '▶ Resume' : '⏸ Pause'}
           </button>
-          <button
-            onClick={fetchLogs}
-            style={{
-              padding: '4px 12px', borderRadius: 4, border: '1px solid var(--border)',
-              background: 'var(--surface-2)', color: 'var(--text-2)', cursor: 'pointer', fontSize: 12,
-            }}
-          >
-            ↺ Refresh
-          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => fetchLogs(page)}>↺ Refresh</button>
         </div>
       </div>
 
-      {/* stats bar */}
-      <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-2)' }}>
-        <span>{logs.length} entries</span>
-        {(['info', 'warn', 'error'] as const).map(l => counts[l] ? (
-          <span key={l} style={{ color: LEVEL_COLORS[l] }}>
-            {counts[l]} {l}
-          </span>
-        ) : null)}
-        {paused && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>● PAUSED</span>}
+      {/* ── Filter pills ── */}
+      <div className="filter-pills">
+        {(['all', 'info', 'warn', 'error', 'debug'] as const).map(l => (
+          <button
+            key={l}
+            className={`pill ${level === l ? 'active' : ''}`}
+            onClick={() => setLevel(l)}
+            style={level === l && l !== 'all' ? { background: LEVEL_COLORS[l], borderColor: LEVEL_COLORS[l] } : undefined}
+          >
+            {l === 'all' ? `All (${total})` : l.charAt(0).toUpperCase() + l.slice(1)}
+          </button>
+        ))}
+        {paused && (
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--amber)', fontWeight: 600 }}>● PAUSED</span>
+        )}
       </div>
 
-      {/* log table */}
-      <div style={{
-        flex: 1, overflow: 'auto', borderRadius: 6, border: '1px solid var(--border)',
-        background: 'var(--surface)', fontFamily: 'monospace',
-      }}>
-        {loading ? (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-2)' }}>Loading…</div>
-        ) : logs.length === 0 ? (
-          <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-2)' }}>No logs yet.</div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      {/* ── Table ── */}
+      {loading ? (
+        <div className="empty-state">
+          <div className="empty-icon">⏳</div>
+          <div className="empty-title">Loading logs…</div>
+        </div>
+      ) : logs.length === 0 ? (
+        <div className="empty-state" data-testid="logs-empty">
+          <div className="empty-icon">🗒️</div>
+          <div className="empty-title">No logs yet</div>
+          <div className="empty-sub">Server activity will appear here</div>
+        </div>
+      ) : (
+        <div className="table-wrap" style={{ flex: 1, overflow: 'auto' }}>
+          <table data-testid="logs-table" style={{ fontFamily: 'monospace' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)', position: 'sticky', top: 0, background: 'var(--surface)' }}>
-                {['Time', 'Level', 'Source', 'Message', ''].map(h => (
-                  <th key={h} style={{ padding: '6px 10px', textAlign: 'left', color: 'var(--text-2)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
-                ))}
+              <tr>
+                <th>Time</th>
+                <th>Level</th>
+                <th>Source</th>
+                <th>Message</th>
+                <th style={{ width: 40 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -161,15 +153,14 @@ export function LogsPanel() {
                     key={log.id}
                     onClick={() => log.context && toggleExpand(log.id)}
                     style={{
-                      borderBottom: '1px solid var(--border)',
                       cursor: log.context ? 'pointer' : 'default',
                       background: expanded.has(log.id) ? LEVEL_BG[log.level] : undefined,
                     }}
                   >
-                    <td style={{ padding: '5px 10px', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                    <td style={{ whiteSpace: 'nowrap', color: 'var(--muted)', fontSize: 12 }}>
                       {new Date(log.timestamp).toLocaleTimeString()}
                     </td>
-                    <td style={{ padding: '5px 10px', whiteSpace: 'nowrap' }}>
+                    <td style={{ whiteSpace: 'nowrap' }}>
                       <span style={{
                         padding: '1px 7px', borderRadius: 10, fontSize: 11, fontWeight: 700,
                         background: LEVEL_BG[log.level], color: LEVEL_COLORS[log.level],
@@ -177,24 +168,16 @@ export function LogsPanel() {
                         {log.level.toUpperCase()}
                       </span>
                     </td>
-                    <td style={{ padding: '5px 10px', color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
-                      {log.source}
-                    </td>
-                    <td style={{ padding: '5px 10px', color: 'var(--text)' }}>
-                      {log.message}
-                    </td>
-                    <td style={{ padding: '5px 10px', color: 'var(--text-2)' }}>
-                      {log.context && (
-                        <span style={{ fontSize: 11 }}>{expanded.has(log.id) ? '▲' : '▼'} ctx</span>
-                      )}
+                    <td style={{ whiteSpace: 'nowrap', color: 'var(--dim)', fontSize: 12 }}>{log.source}</td>
+                    <td style={{ color: 'var(--text)', fontSize: 12 }}>{log.message}</td>
+                    <td style={{ color: 'var(--muted)', fontSize: 11, whiteSpace: 'nowrap' }}>
+                      {log.context && (expanded.has(log.id) ? '▲ ctx' : '▼ ctx')}
                     </td>
                   </tr>
                   {expanded.has(log.id) && log.context && (
                     <tr key={`${log.id}-ctx`} style={{ background: LEVEL_BG[log.level] }}>
                       <td colSpan={5} style={{ padding: '6px 16px 10px 40px' }}>
-                        <pre style={{
-                          margin: 0, fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                        }}>
+                        <pre style={{ margin: 0, fontSize: 11, color: 'var(--text)', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                           {JSON.stringify(log.context, null, 2)}
                         </pre>
                       </td>
@@ -204,8 +187,31 @@ export function LogsPanel() {
               ))}
             </tbody>
           </table>
-        )}
-      </div>
+
+          {totalPages > 1 && (
+            <div className="pagination">
+              <span className="pagination-info">
+                {total} log{total !== 1 ? 's' : ''}
+                <span style={{ color: 'var(--border)', margin: '0 2px' }}>·</span>
+                page {page} of {totalPages}
+              </span>
+              <div className="pagination-pages">
+                <button className="page-btn" onClick={() => goToPage(1)} disabled={page === 1}>«</button>
+                <button className="page-btn" onClick={() => goToPage(page - 1)} disabled={page === 1}>‹</button>
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  const start = Math.max(1, Math.min(page - 2, totalPages - 4));
+                  const p = start + i;
+                  return p <= totalPages ? (
+                    <button key={p} className={`page-btn ${p === page ? 'active' : ''}`} onClick={() => goToPage(p)}>{p}</button>
+                  ) : null;
+                })}
+                <button className="page-btn" onClick={() => goToPage(page + 1)} disabled={page === totalPages}>›</button>
+                <button className="page-btn" onClick={() => goToPage(totalPages)} disabled={page === totalPages}>»</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
