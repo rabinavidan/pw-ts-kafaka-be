@@ -105,6 +105,19 @@ function rowToPayment(r) {
 const kafka    = new Kafka({ clientId: 'mock-server', brokers: BROKERS, logCreator: () => () => {} });
 const producer = kafka.producer({ allowAutoTopicCreation: true });
 let producerReady = false;
+let kafkaReconnectTimer = null;
+
+async function connectKafka() {
+  try {
+    await producer.connect();
+    producerReady = true;
+    if (kafkaReconnectTimer) { clearTimeout(kafkaReconnectTimer); kafkaReconnectTimer = null; }
+    console.log('[mock-server] Kafka producer connected');
+  } catch (err) {
+    console.warn('[mock-server] Kafka unavailable, retrying in 5s:', err.message);
+    kafkaReconnectTimer = setTimeout(connectKafka, 5000);
+  }
+}
 
 async function publish(topic, key, value, headers = {}) {
   // Persist every event to the DB event log
@@ -567,9 +580,7 @@ async function start() {
     process.exit(1);
   }
 
-  producer.connect()
-    .then(() => { producerReady = true; console.log('[mock-server] Kafka producer connected'); })
-    .catch(err => console.warn('[mock-server] Kafka unavailable, events will not be published:', err.message));
+  connectKafka();
 
   server.listen(PORT, () => console.log(`Mock API server listening on http://localhost:${PORT}`));
 }

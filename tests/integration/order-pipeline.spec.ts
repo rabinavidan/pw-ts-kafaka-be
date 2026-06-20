@@ -5,9 +5,21 @@ import { Order, Payment } from '../../src/models/api.model';
 import { OrderEvent, PaymentEvent } from '../../src/models/kafka.model';
 import { createOrderRequest } from '../../src/utils/data.factory';
 import { assertCreatedResponse } from '../../src/utils/assertion';
-import { sleep } from '../../src/utils/retry';
+import { sleep, waitUntil } from '../../src/utils/retry';
 
 test.describe('Order Pipeline Integration @regression', () => {
+  test.beforeAll(async ({ request }) => {
+    await waitUntil(async () => {
+      try {
+        const res = await request.get('/health');
+        const body = await res.json();
+        return body?.dependencies?.find((d: { name: string; status: string }) => d.name === 'kafka')?.status === 'up';
+      } catch {
+        return false;
+      }
+    }, 30000, 2000);
+  });
+
   test('creating an order via API publishes order event to Kafka', async ({ api, kafka }) => {
     const payload = createOrderRequest();
     const orderResponse = await api.post<Order>(endpoints.orders, payload);
