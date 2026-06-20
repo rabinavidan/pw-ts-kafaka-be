@@ -19,7 +19,7 @@ function randomPaymentPayload() {
 }
 
 export function PaymentsPanel({ onToast }: Props) {
-  const { payments, create, process, refund, fail, remove, removeMany } = usePayments();
+  const { payments, loading, page, total, totalPages, refresh, create, process, refund, fail, remove, removeMany } = usePayments();
   const [showModal, setShowModal]   = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [bulking, setBulking]           = useState(false);
@@ -33,7 +33,14 @@ export function PaymentsPanel({ onToast }: Props) {
   const [bulkActionLabel, setBulkLabel]   = useState('');
   const [bulkActionRunning, setBulkRunning] = useState(false);
 
-  const visible         = filter === 'all' ? payments : payments.filter(p => p.status === filter);
+  const currentFilter = filter === 'all' ? undefined : filter;
+
+  useEffect(() => { refresh(currentFilter, 1); }, [filter, refresh]);
+  useEffect(() => { setSelected(new Set()); }, [filter, page]);
+
+  function goToPage(p: number) { refresh(currentFilter, p); setSelected(new Set()); }
+
+  const visible         = payments;
   const allSelected     = visible.length > 0 && visible.every(p => selected.has(p.id));
   const someSelected    = visible.some(p => selected.has(p.id));
   const selectedPending = visible.filter(p => selected.has(p.id) && p.status === 'pending');
@@ -53,8 +60,6 @@ export function PaymentsPanel({ onToast }: Props) {
   }
 
   const clearSelection = useCallback(() => setSelected(new Set()), []);
-
-  useEffect(() => { clearSelection(); }, [filter, clearSelection]);
 
   // ── Bulk actions ──────────────────────────────────────────
   async function runBulkAction(action: 'process' | 'refund' | 'fail') {
@@ -167,10 +172,7 @@ export function PaymentsPanel({ onToast }: Props) {
             onClick={() => setFilter(f)}
             data-testid={`filter-pill-${f}`}
           >
-            {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
-            {f !== 'all' && (
-              <span style={{ opacity: .65, marginLeft: 4 }}>({payments.filter(p => p.status === f).length})</span>
-            )}
+            {f === 'all' ? `All (${total})` : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
       </div>
@@ -232,17 +234,16 @@ export function PaymentsPanel({ onToast }: Props) {
       )}
 
       {/* ── Table / empty state ── */}
-      {payments.length === 0 ? (
+      {loading && visible.length === 0 ? (
+        <div className="empty-state" data-testid="payments-loading">
+          <div className="empty-icon">⏳</div>
+          <div className="empty-title">Loading payments…</div>
+        </div>
+      ) : visible.length === 0 ? (
         <div className="empty-state" data-testid="payments-empty">
           <div className="empty-icon">💳</div>
           <div className="empty-title">No payments yet</div>
           <div className="empty-sub">Initiate a payment for an existing order ID</div>
-        </div>
-      ) : visible.length === 0 ? (
-        <div className="empty-state" data-testid="payments-filter-empty">
-          <div className="empty-icon">🔍</div>
-          <div className="empty-title">No {filter} payments</div>
-          <div className="empty-sub">Try a different filter</div>
         </div>
       ) : (
         <div className="table-wrap">
@@ -310,6 +311,28 @@ export function PaymentsPanel({ onToast }: Props) {
               })}
             </tbody>
           </table>
+          {totalPages > 1 && (
+            <div className="pagination">
+              <span className="pagination-info">
+                {total} payment{total !== 1 ? 's' : ''}
+                <span style={{ color: 'var(--border)', margin: '0 2px' }}>·</span>
+                page {page} of {totalPages}
+              </span>
+              <div className="pagination-pages">
+                <button className="page-btn" onClick={() => goToPage(1)} disabled={page === 1}>«</button>
+                <button className="page-btn" onClick={() => goToPage(page - 1)} disabled={page === 1}>‹</button>
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  const start = Math.max(1, Math.min(page - 2, totalPages - 4));
+                  const p = start + i;
+                  return p <= totalPages ? (
+                    <button key={p} className={`page-btn ${p === page ? 'active' : ''}`} onClick={() => goToPage(p)}>{p}</button>
+                  ) : null;
+                })}
+                <button className="page-btn" onClick={() => goToPage(page + 1)} disabled={page === totalPages}>›</button>
+                <button className="page-btn" onClick={() => goToPage(totalPages)} disabled={page === totalPages}>»</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

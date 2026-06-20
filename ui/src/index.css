@@ -203,6 +203,26 @@ tr.row-selected:hover td { background: rgba(59,130,246,.11); }
 }
 .bulk-bar-clear:hover { color: var(--text); background: rgba(255,255,255,.06); }
 
+/* ── Pagination ──────────────────────────────────────── */
+.pagination {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-top: 1px solid var(--border);
+  background: var(--card); border-radius: 0 0 10px 10px;
+  font-size: 12px; color: var(--muted);
+}
+.pagination-info { display: flex; align-items: center; gap: 10px; }
+.pagination-pages { display: flex; gap: 4px; align-items: center; }
+.page-btn {
+  min-width: 30px; height: 26px; padding: 0 8px;
+  border-radius: 5px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--dim);
+  font-size: 12px; cursor: pointer; transition: all .15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.page-btn:hover:not(:disabled) { background: var(--border); color: var(--text); }
+.page-btn:disabled { opacity: .35; cursor: default; }
+.page-btn.active { background: var(--accent, #3b82f6); color: #fff; border-color: transparent; }
+
 /* ── Empty state ─────────────────────────────────────── */
 .empty-state {
   text-align: center; padding: 72px 24px;

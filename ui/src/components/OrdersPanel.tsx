@@ -24,7 +24,7 @@ function randomOrderPayload() {
 }
 
 export function OrdersPanel({ onToast }: Props) {
-  const { orders, loading, refresh, create, cancel, confirm, remove, removeMany } = useOrders();
+  const { orders, loading, page, total, totalPages, PAGE_SIZE, refresh, create, cancel, confirm, remove, removeMany } = useOrders();
   const [filter, setFilter]         = useState<Filter>('all');
   const [showModal, setShowModal]   = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -38,10 +38,14 @@ export function OrdersPanel({ onToast }: Props) {
   const [bulkActionLabel, setBulkLabel]   = useState('');
   const [bulkActionRunning, setBulkRunning] = useState(false);
 
-  useEffect(() => { refresh(filter === 'all' ? undefined : filter); }, [filter, refresh]);
-  useEffect(() => { setSelected(new Set()); }, [filter]);
+  const currentFilter = filter === 'all' ? undefined : filter;
 
-  const visible         = filter === 'all' ? orders : orders.filter(o => o.status === filter);
+  useEffect(() => { refresh(currentFilter, 1); }, [filter, refresh]);
+  useEffect(() => { setSelected(new Set()); }, [filter, page]);
+
+  function goToPage(p: number) { refresh(currentFilter, p); clearSelection(); }
+
+  const visible         = orders;
   const allSelected     = visible.length > 0 && visible.every(o => selected.has(o.id));
   const someSelected    = visible.some(o => selected.has(o.id));
   const selectedCreated = visible.filter(o => selected.has(o.id) && o.status === 'created');
@@ -183,13 +187,12 @@ export function OrdersPanel({ onToast }: Props) {
             onClick={() => setFilter(f)}
             data-testid={`filter-pill-${f}`}
           >
-            {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
-            {f !== 'all' && <span style={{ opacity: .65, marginLeft: 4 }}>({orders.filter(o => o.status === f).length})</span>}
+            {f === 'all' ? `All (${total})` : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
         <button
           className="pill pill-refresh"
-          onClick={() => refresh(filter === 'all' ? undefined : filter)}
+          onClick={() => refresh(currentFilter, page)}
           data-testid="btn-refresh-orders"
         >
           ↻
@@ -260,6 +263,7 @@ export function OrdersPanel({ onToast }: Props) {
       ) : (
         <div className="table-wrap">
           <table data-testid="orders-table">
+
             <thead>
               <tr>
                 <th style={{ width: 36 }}>
@@ -341,6 +345,28 @@ export function OrdersPanel({ onToast }: Props) {
               })}
             </tbody>
           </table>
+          {totalPages > 1 && (
+            <div className="pagination">
+              <span className="pagination-info">
+                {total} order{total !== 1 ? 's' : ''}
+                <span style={{ color: 'var(--border)', margin: '0 2px' }}>·</span>
+                page {page} of {totalPages}
+              </span>
+              <div className="pagination-pages">
+                <button className="page-btn" onClick={() => goToPage(1)} disabled={page === 1}>«</button>
+                <button className="page-btn" onClick={() => goToPage(page - 1)} disabled={page === 1}>‹</button>
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  const start = Math.max(1, Math.min(page - 2, totalPages - 4));
+                  const p = start + i;
+                  return p <= totalPages ? (
+                    <button key={p} className={`page-btn ${p === page ? 'active' : ''}`} onClick={() => goToPage(p)}>{p}</button>
+                  ) : null;
+                })}
+                <button className="page-btn" onClick={() => goToPage(page + 1)} disabled={page === totalPages}>›</button>
+                <button className="page-btn" onClick={() => goToPage(totalPages)} disabled={page === totalPages}>»</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
