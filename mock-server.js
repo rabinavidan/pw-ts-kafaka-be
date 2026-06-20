@@ -230,6 +230,7 @@ const server = http.createServer(async (req, res) => {
 
     return send(res, 200, {
       status:  'healthy',
+      service: 'orders-service',
       version: '1.0.0',
       uptime:  Math.floor((Date.now() - startTime) / 1000),
       dependencies: [

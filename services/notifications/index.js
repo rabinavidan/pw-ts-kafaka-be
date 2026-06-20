@@ -38,44 +38,49 @@ async function initDB() {
     )`);
 }
 
+async function connectKafka() {
+  try {
+    await consumer.connect();
+    for (const topic of TOPICS) {
+      await consumer.subscribe({ topic, fromBeginning: false });
+    }
+    console.log('[notifications] Subscribed to topics:', TOPICS.join(', '));
+    consumerReady = true;
+
+    await consumer.run({
+      eachMessage: async ({ topic, partition, message }) => {
+        const key       = message.key?.toString() || null;
+        const eventType = message.headers?.['event-type']?.toString() || 'unknown';
+        let payload     = {};
+        try { payload = message.value ? JSON.parse(message.value.toString()) : {}; } catch {}
+
+        await pool.query(
+          `INSERT INTO event_log (id, topic, key, event_type, payload)
+           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
+          [randomUUID(), topic, key, eventType, payload]
+        ).catch(err => console.warn('[notifications] event_log insert failed:', err.message));
+
+        await pool.query(
+          `INSERT INTO kafka_consumer_offsets (consumer_group, topic, partition, committed_offset, updated_at)
+           VALUES ('notification-service-group', $1, $2, $3, NOW())
+           ON CONFLICT (consumer_group, topic, partition)
+           DO UPDATE SET committed_offset = EXCLUDED.committed_offset, updated_at = NOW()`,
+          [topic, partition, message.offset]
+        ).catch(() => {});
+
+        messagesProcessed++;
+      },
+    });
+  } catch (err) {
+    console.warn('[notifications] Kafka unavailable, running without consumer:', err.message);
+  }
+}
+
 async function start() {
   await initDB();
   console.log('[notifications] Database ready');
 
-  await consumer.connect();
-  for (const topic of TOPICS) {
-    await consumer.subscribe({ topic, fromBeginning: false });
-  }
-  console.log('[notifications] Subscribed to topics:', TOPICS.join(', '));
-  consumerReady = true;
-
-  await consumer.run({
-    eachMessage: async ({ topic, partition, message }) => {
-      const key       = message.key?.toString() || null;
-      const eventType = message.headers?.['event-type']?.toString() || 'unknown';
-      let payload     = {};
-      try { payload = message.value ? JSON.parse(message.value.toString()) : {}; } catch {}
-
-      await pool.query(
-        `INSERT INTO event_log (id, topic, key, event_type, payload)
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
-        [randomUUID(), topic, key, eventType, payload]
-      ).catch(err => console.warn('[notifications] event_log insert failed:', err.message));
-
-      // Track committed offset
-      await pool.query(
-        `INSERT INTO kafka_consumer_offsets (consumer_group, topic, partition, committed_offset, updated_at)
-         VALUES ('notification-service-group', $1, $2, $3, NOW())
-         ON CONFLICT (consumer_group, topic, partition)
-         DO UPDATE SET committed_offset = EXCLUDED.committed_offset, updated_at = NOW()`,
-        [topic, partition, message.offset]
-      ).catch(() => {});
-
-      messagesProcessed++;
-    },
-  });
-
-  // Minimal health server — K8s liveness/readiness probe target
+  // Health server starts immediately — Kafka connects in background
   http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -84,6 +89,8 @@ async function start() {
       consumerReady, messagesProcessed,
     }));
   }).listen(HEALTH_PORT, () => console.log(`[notifications] Health on port ${HEALTH_PORT}`));
+
+  connectKafka();
 }
 
 start().catch(err => { console.error('[notifications] Fatal:', err.message); process.exit(1); });
