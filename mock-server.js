@@ -96,6 +96,23 @@ function serverLog(level, source, message, context = null) {
   ).catch(err => console.warn('[logger] DB write failed:', err.message));
 }
 
+// ── DB query wrapper — logs every table interaction ───────────────
+async function dbQuery(table, operation, sql, params = []) {
+  const t0 = Date.now();
+  try {
+    const result = await pool.query(sql, params);
+    serverLog('info', 'db', `${operation} on ${table} → ${result.rowCount ?? result.rows.length} row(s)`, {
+      table, operation, rowCount: result.rowCount ?? result.rows.length, ms: Date.now() - t0,
+    });
+    return result;
+  } catch (err) {
+    serverLog('error', 'db', `${operation} on ${table} failed: ${err.message}`, {
+      table, operation, ms: Date.now() - t0,
+    });
+    throw err;
+  }
+}
+
 // ── Row mappers ───────────────────────────────────────────────────
 function rowToOrder(r) {
   return {
@@ -349,11 +366,8 @@ const server = http.createServer(async (req, res) => {
     const id     = randomUUID();
     const now    = new Date();
 
-    await pool.query(
-      `INSERT INTO orders (id, user_id, status, amount, currency, items, created_at, updated_at)
-       VALUES ($1, $2, 'created', $3, $4, $5, $6, $6)`,
-      [id, body.userId, amount, body.currency || 'USD', JSON.stringify(items), now]
-    );
+    await dbQuery('orders', 'INSERT', `INSERT INTO orders (id, user_id, status, amount, currency, items, created_at, updated_at) VALUES ($1, $2, 'created', $3, $4, $5, $6, $6)`,
+      [id, body.userId, amount, body.currency || 'USD', JSON.stringify(items), now]);
 
     const order = {
       id, userId: body.userId, status: 'created', amount,
@@ -378,18 +392,14 @@ const server = http.createServer(async (req, res) => {
     const pageSize = Math.max(1, parseInt(url.searchParams.get('pageSize') || '10', 10));
 
     const countQ = statusFilter
-      ? await pool.query(`SELECT COUNT(*) FROM orders WHERE status = $1`, [statusFilter])
-      : await pool.query(`SELECT COUNT(*) FROM orders`);
+      ? await dbQuery('orders', 'COUNT', `SELECT COUNT(*) FROM orders WHERE status = $1`, [statusFilter])
+      : await dbQuery('orders', 'COUNT', `SELECT COUNT(*) FROM orders`);
     const total = parseInt(countQ.rows[0].count);
 
     const offset = (page - 1) * pageSize;
     const rowsQ  = statusFilter
-      ? await pool.query(
-          `SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-          [statusFilter, pageSize, offset])
-      : await pool.query(
-          `SELECT * FROM orders ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
-          [pageSize, offset]);
+      ? await dbQuery('orders', 'SELECT', `SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`, [statusFilter, pageSize, offset])
+      : await dbQuery('orders', 'SELECT', `SELECT * FROM orders ORDER BY created_at DESC LIMIT $1 OFFSET $2`, [pageSize, offset]);
 
     return send(res, 200, {
       items:   rowsQ.rows.map(rowToOrder),
@@ -403,10 +413,7 @@ const server = http.createServer(async (req, res) => {
   // PUT /api/v1/orders/:id/confirm
   const orderConfirm = path.match(/^\/api\/v1\/orders\/([^/]+)\/confirm$/);
   if ((method === 'PUT' || method === 'PATCH') && orderConfirm) {
-    const { rows } = await pool.query(
-      `UPDATE orders SET status = 'confirmed', updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [orderConfirm[1]]
-    );
+    const { rows } = await dbQuery('orders', 'UPDATE', `UPDATE orders SET status = 'confirmed', updated_at = NOW() WHERE id = $1 RETURNING *`, [orderConfirm[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     const order = rowToOrder(rows[0]);
     send(res, 200, order);
@@ -421,10 +428,7 @@ const server = http.createServer(async (req, res) => {
   // PUT /api/v1/orders/:id/cancel
   const orderCancel = path.match(/^\/api\/v1\/orders\/([^/]+)\/cancel$/);
   if ((method === 'PUT' || method === 'PATCH') && orderCancel) {
-    const { rows } = await pool.query(
-      `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [orderCancel[1]]
-    );
+    const { rows } = await dbQuery('orders', 'UPDATE', `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1 RETURNING *`, [orderCancel[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     const order = rowToOrder(rows[0]);
     send(res, 200, order);
@@ -439,7 +443,7 @@ const server = http.createServer(async (req, res) => {
   // GET /api/v1/orders/:id
   const orderById = path.match(/^\/api\/v1\/orders\/([^/]+)$/);
   if (method === 'GET' && orderById) {
-    const { rows } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [orderById[1]]);
+    const { rows } = await dbQuery('orders', 'SELECT', `SELECT * FROM orders WHERE id = $1`, [orderById[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     return send(res, 200, rowToOrder(rows[0]));
   }
@@ -455,7 +459,7 @@ const server = http.createServer(async (req, res) => {
 
     // Simulated failure → DLQ
     if (body.simulateFailure) {
-      const { rows: orderRows } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [body.orderId]);
+      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT * FROM orders WHERE id = $1`, [body.orderId]);
       const order = orderRows[0] ? rowToOrder(orderRows[0]) : { orderId: body.orderId };
       send(res, 201, { id: randomUUID(), orderId: body.orderId, status: 'failed' });
       publish('dead-letter-queue', body.orderId, {
@@ -465,14 +469,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Duplicate payment guard
-    const { rows: existing } = await pool.query(
-      `SELECT id FROM payments WHERE order_id = $1`, [body.orderId]
-    );
+    const { rows: existing } = await dbQuery('payments', 'SELECT', `SELECT id FROM payments WHERE order_id = $1`, [body.orderId]);
     if (existing.length) {
       return send(res, 409, { code: 'CONFLICT', message: 'Payment already exists for this order' });
     }
 
-    const { rows: orderRows } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [body.orderId]);
+    const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT * FROM orders WHERE id = $1`, [body.orderId]);
     const order   = orderRows[0] ? rowToOrder(orderRows[0]) : null;
     const id      = randomUUID();
     const amount  = body.amount ?? order?.amount ?? 100;
@@ -480,11 +482,8 @@ const server = http.createServer(async (req, res) => {
     const method  = body.method || 'credit_card';
     const now     = new Date();
 
-    await pool.query(
-      `INSERT INTO payments (id, order_id, status, amount, currency, method, created_at)
-       VALUES ($1, $2, 'pending', $3, $4, $5, $6)`,
-      [id, body.orderId, amount, currency, method, now]
-    );
+    await dbQuery('payments', 'INSERT', `INSERT INTO payments (id, order_id, status, amount, currency, method, created_at) VALUES ($1, $2, 'pending', $3, $4, $5, $6)`,
+      [id, body.orderId, amount, currency, method, now]);
 
     const payment = { id, orderId: body.orderId, status: 'pending', amount, currency, method, createdAt: now.toISOString() };
     send(res, 201, payment);
@@ -499,10 +498,7 @@ const server = http.createServer(async (req, res) => {
   // PUT /api/v1/payments/:id/process
   const paymentProcess = path.match(/^\/api\/v1\/payments\/([^/]+)\/process$/);
   if ((method === 'PUT' || method === 'PATCH') && paymentProcess) {
-    const { rows } = await pool.query(
-      `UPDATE payments SET status = 'processed', updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [paymentProcess[1]]
-    );
+    const { rows } = await dbQuery('payments', 'UPDATE', `UPDATE payments SET status = 'processed', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentProcess[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
     send(res, 200, payment);
@@ -517,10 +513,7 @@ const server = http.createServer(async (req, res) => {
   // PUT /api/v1/payments/:id/refund
   const paymentRefund = path.match(/^\/api\/v1\/payments\/([^/]+)\/refund$/);
   if ((method === 'PUT' || method === 'PATCH') && paymentRefund) {
-    const { rows } = await pool.query(
-      `UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [paymentRefund[1]]
-    );
+    const { rows } = await dbQuery('payments', 'UPDATE', `UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentRefund[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
     send(res, 200, payment);
@@ -535,10 +528,7 @@ const server = http.createServer(async (req, res) => {
   // PUT /api/v1/payments/:id/fail
   const paymentFail = path.match(/^\/api\/v1\/payments\/([^/]+)\/fail$/);
   if ((method === 'PUT' || method === 'PATCH') && paymentFail) {
-    const { rows } = await pool.query(
-      `UPDATE payments SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [paymentFail[1]]
-    );
+    const { rows } = await dbQuery('payments', 'UPDATE', `UPDATE payments SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentFail[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
     send(res, 200, payment);
@@ -553,7 +543,7 @@ const server = http.createServer(async (req, res) => {
   // GET /api/v1/payments/:id
   const paymentById = path.match(/^\/api\/v1\/payments\/([^/]+)$/);
   if (method === 'GET' && paymentById) {
-    const { rows } = await pool.query(`SELECT * FROM payments WHERE id = $1`, [paymentById[1]]);
+    const { rows } = await dbQuery('payments', 'SELECT', `SELECT * FROM payments WHERE id = $1`, [paymentById[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     return send(res, 200, rowToPayment(rows[0]));
   }
@@ -561,7 +551,7 @@ const server = http.createServer(async (req, res) => {
   // DELETE /api/v1/orders/:id
   const orderDel = path.match(/^\/api\/v1\/orders\/([^/]+)$/);
   if (method === 'DELETE' && orderDel) {
-    const { rowCount } = await pool.query('DELETE FROM orders WHERE id = $1', [orderDel[1]]);
+    const { rowCount } = await dbQuery('orders', 'DELETE', `DELETE FROM orders WHERE id = $1`, [orderDel[1]]);
     if (!rowCount) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     publish('orders', orderDel[1], { eventType: 'order.deleted', orderId: orderDel[1] }, { 'event-type': 'order.deleted' });
     return send(res, 200, { id: orderDel[1], deleted: true });
@@ -570,7 +560,7 @@ const server = http.createServer(async (req, res) => {
   // DELETE /api/v1/payments/:id
   const paymentDel = path.match(/^\/api\/v1\/payments\/([^/]+)$/);
   if (method === 'DELETE' && paymentDel) {
-    const { rowCount } = await pool.query('DELETE FROM payments WHERE id = $1', [paymentDel[1]]);
+    const { rowCount } = await dbQuery('payments', 'DELETE', `DELETE FROM payments WHERE id = $1`, [paymentDel[1]]);
     if (!rowCount) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     publish('payments', paymentDel[1], { eventType: 'payment.deleted', paymentId: paymentDel[1] }, { 'event-type': 'payment.deleted' });
     return send(res, 200, { id: paymentDel[1], deleted: true });
