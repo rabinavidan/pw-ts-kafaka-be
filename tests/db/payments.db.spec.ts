@@ -2,10 +2,6 @@ import { test, expect } from '../../src/fixtures';
 import { v4 as uuidv4 } from 'uuid';
 
 test.describe('DB Layer — payments table @db', () => {
-  async function seedOrder(db: Awaited<ReturnType<typeof import('../../src/fixtures')['test']['extend']>> extends never ? never : any) {
-    return db.insertOrder({ user_id: uuidv4(), amount: 100 });
-  }
-
   test('inserts a payment and reads it back by id', async ({ db }) => {
     const order = await db.insertOrder({ user_id: uuidv4(), amount: 100 });
     const id = uuidv4();

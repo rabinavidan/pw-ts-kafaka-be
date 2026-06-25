@@ -6,7 +6,7 @@ test.describe('Dashboard smoke @smoke', () => {
     await expect(page.getByText('pw-kafka-be')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Orders' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Payments' })).toBeVisible();
-    await expect(page.getByText(/+ New Order/i)).toBeVisible();
+    await expect(page.getByText(/\+ New Order/i)).toBeVisible();
   });
 
   test('health indicator shows Healthy', async ({ page }) => {

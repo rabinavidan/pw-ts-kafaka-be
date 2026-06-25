@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, APIRequestContext } from '@playwright/test';
 import { ApiHelper } from '../../src/helpers/api.helper';
 import { Order, Payment } from '../../src/models/api.model';
 import { createOrderRequest, randomId } from '../../src/utils/data.factory';
@@ -7,7 +7,7 @@ import { assertSuccessResponse, assertCreatedResponse, assertErrorResponse } fro
 const SVC       = process.env.PAYMENTS_SERVICE_URL || 'http://localhost:3002';
 const ORDERS_SVC = process.env.ORDERS_SERVICE_URL  || 'http://localhost:3001';
 
-async function createOrder(request: Parameters<typeof ApiHelper>[0]): Promise<Order> {
+async function createOrder(request: APIRequestContext): Promise<Order> {
   const ordersApi = new ApiHelper(request, ORDERS_SVC);
   const res = await ordersApi.post<Order>('/api/v1/orders', createOrderRequest());
   return res.data;

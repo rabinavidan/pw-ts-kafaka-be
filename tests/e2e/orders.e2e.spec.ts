@@ -6,11 +6,11 @@ test.beforeEach(async ({ page }) => {
 
 test.describe('Orders — navigation & layout', () => {
   test('dashboard loads with Orders tab active by default', async ({ header, ordersPage }) => {
-    await expect(header.tabOrders).toHaveClass(/active/);
-    await expect(ordersPage.panel).toBeVisible();
-    await expect(ordersPage.btnNewOrder).toBeVisible();
-    await expect(ordersPage.btnBulkCreate).toBeVisible();
-    await expect(ordersPage.filterPills).toBeVisible();
+    await expect.soft(header.tabOrders).toHaveClass(/active/);
+    await expect.soft(ordersPage.panel).toBeVisible();
+    await expect.soft(ordersPage.btnNewOrder).toBeVisible();
+    await expect.soft(ordersPage.btnBulkCreate).toBeVisible();
+    await expect.soft(ordersPage.filterPills).toBeVisible();
   });
 
   test('switching to Payments tab hides Orders panel', async ({ header, ordersPage, paymentsPage }) => {
@@ -44,11 +44,11 @@ test.describe('Orders — create', () => {
     await expect(ordersPage.formError).toContainText('All product IDs are required');
   });
 
-  test('creates an order and shows it in the table', async ({ page, ordersPage, eventFeed }) => {
+  test('creates an order and shows it in the table', async ({ ordersPage }) => {
     await ordersPage.createOrder('e2e-user-01', 'prod-e2e-01');
 
-    await expect(page.getByTestId('toast')).toBeVisible();
-    await expect(page.getByTestId('toast-message')).toContainText('Order created');
+    await expect(ordersPage.toast).toBeVisible();
+    await expect(ordersPage.toastMessage).toContainText('Order created');
 
     const rows = ordersPage.rows();
     await expect(rows.first()).toBeVisible();
@@ -76,9 +76,9 @@ test.describe('Orders — create', () => {
 });
 
 test.describe('Orders — confirm & cancel', () => {
-  test('confirms a single order via row action button', async ({ page, ordersPage }) => {
+  test('confirms a single order via row action button', async ({ ordersPage }) => {
     await ordersPage.createOrder('e2e-confirm-user', 'prod-confirm');
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
 
     const createdRows = ordersPage.rowsWithStatus('created');
     await createdRows.first().waitFor({ state: 'visible' });
@@ -90,9 +90,9 @@ test.describe('Orders — confirm & cancel', () => {
     await expect(ordersPage.orderStatus(orderId)).toContainText('confirmed');
   });
 
-  test('cancels a single order via row action button', async ({ page, ordersPage }) => {
+  test('cancels a single order via row action button', async ({ ordersPage }) => {
     await ordersPage.createOrder('e2e-cancel-user', 'prod-cancel');
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
 
     const createdRows = ordersPage.rowsWithStatus('created');
     await createdRows.first().waitFor({ state: 'visible' });
@@ -157,34 +157,34 @@ test.describe('Orders — bulk selection', () => {
     await expect(ordersPage.bulkBar).not.toBeVisible();
   });
 
-  test('bulk confirm changes selected orders to confirmed', async ({ page, ordersPage }) => {
+  test('bulk confirm changes selected orders to confirmed', async ({ ordersPage }) => {
     await ordersPage.createOrder('bulk-c-1', 'prod-c-1');
     await ordersPage.createOrder('bulk-c-2', 'prod-c-2');
 
     await ordersPage.selectAll.check();
     await ordersPage.btnBulkConfirm.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('confirmed');
+    await expect(ordersPage.toastMessage.last()).toContainText('confirmed');
     await expect(ordersPage.bulkBar).not.toBeVisible();
   });
 
-  test('bulk cancel changes selected orders to cancelled', async ({ page, ordersPage }) => {
+  test('bulk cancel changes selected orders to cancelled', async ({ ordersPage }) => {
     await ordersPage.createOrder('bulk-x-1', 'prod-x-1');
     await ordersPage.createOrder('bulk-x-2', 'prod-x-2');
 
     await ordersPage.selectAll.check();
     await ordersPage.btnBulkCancel.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('cancelled');
+    await expect(ordersPage.toastMessage.last()).toContainText('cancelled');
     await expect(ordersPage.bulkBar).not.toBeVisible();
   });
 });
 
 test.describe('Orders — bulk create', () => {
-  test('Bulk ×15 creates 15 orders and shows success toast', async ({ page, ordersPage }) => {
+  test('Bulk ×15 creates 15 orders and shows success toast', async ({ ordersPage }) => {
     await ordersPage.btnBulkCreate.click();
 
-    await expect(page.getByTestId('toast-message')).toContainText('15 orders created', { timeout: 30_000 });
+    await expect(ordersPage.toastMessage).toContainText('15 orders created', { timeout: 30_000 });
 
     const rows = ordersPage.rows();
     expect(await rows.count()).toBeGreaterThanOrEqual(15);
@@ -192,9 +192,9 @@ test.describe('Orders — bulk create', () => {
 });
 
 test.describe('Orders — delete', () => {
-  test('single delete removes order row from table', async ({ page, ordersPage }) => {
+  test('single delete removes order row from table', async ({ ordersPage }) => {
     await ordersPage.createOrder('del-user-01', 'del-prod-01');
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
 
     const rows = ordersPage.rows();
     await rows.first().waitFor({ state: 'visible' });
@@ -202,13 +202,13 @@ test.describe('Orders — delete', () => {
 
     await ordersPage.btnDeleteOrder(orderId).click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(ordersPage.toastMessage.last()).toContainText('deleted');
     await expect(ordersPage.orderRow(orderId)).not.toBeVisible();
   });
 
-  test('single delete works on confirmed order', async ({ page, ordersPage }) => {
+  test('single delete works on confirmed order', async ({ ordersPage }) => {
     await ordersPage.createOrder('del-confirmed-user', 'del-confirmed-prod');
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
 
     const createdRows = ordersPage.rowsWithStatus('created');
     await createdRows.first().waitFor();
@@ -219,11 +219,11 @@ test.describe('Orders — delete', () => {
 
     await ordersPage.btnDeleteOrder(orderId).click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(ordersPage.toastMessage.last()).toContainText('deleted');
     await expect(ordersPage.orderRow(orderId)).not.toBeVisible();
   });
 
-  test('bulk delete removes all selected orders', async ({ page, ordersPage }) => {
+  test('bulk delete removes all selected orders', async ({ ordersPage }) => {
     await ordersPage.createOrder('bulk-del-1', 'bulk-del-prod-1');
     await ordersPage.createOrder('bulk-del-2', 'bulk-del-prod-2');
 
@@ -232,22 +232,22 @@ test.describe('Orders — delete', () => {
 
     await ordersPage.btnBulkDelete.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(ordersPage.toastMessage.last()).toContainText('deleted');
     await expect(ordersPage.bulkBar).not.toBeVisible();
   });
 
-  test('bulk delete hides bulk bar after completion', async ({ page, ordersPage }) => {
+  test('bulk delete hides bulk bar after completion', async ({ ordersPage }) => {
     await ordersPage.createOrder('bulk-del-hide-1', 'prod-1');
     await ordersPage.selectAll.check();
     await ordersPage.btnBulkDelete.click();
 
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
     await expect(ordersPage.bulkBar).not.toBeVisible();
   });
 
-  test('deleting an order emits order.deleted event in feed', async ({ page, ordersPage, eventFeed }) => {
+  test('deleting an order emits order.deleted event in feed', async ({ ordersPage, eventFeed }) => {
     await ordersPage.createOrder('evt-del-user', 'evt-del-prod');
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
 
     const rows = ordersPage.rows();
     await rows.first().waitFor();
@@ -267,9 +267,9 @@ test.describe('Orders — Kafka events', () => {
     await expect(eventFeed.eventsOfType('order.created').first()).toBeVisible();
   });
 
-  test('confirming an order emits order.confirmed event', async ({ page, ordersPage, eventFeed }) => {
+  test('confirming an order emits order.confirmed event', async ({ ordersPage, eventFeed }) => {
     await ordersPage.createOrder('evt-confirm', 'evt-prod-c');
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
 
     const createdRows = ordersPage.rowsWithStatus('created');
     await createdRows.first().waitFor();
@@ -280,9 +280,9 @@ test.describe('Orders — Kafka events', () => {
     await expect(eventFeed.eventsOfType('order.confirmed').first()).toBeVisible();
   });
 
-  test('cancelling an order emits order.cancelled event', async ({ page, ordersPage, eventFeed }) => {
+  test('cancelling an order emits order.cancelled event', async ({ ordersPage, eventFeed }) => {
     await ordersPage.createOrder('evt-cancel', 'evt-prod-x');
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(ordersPage.toast).toBeVisible();
 
     const createdRows = ordersPage.rowsWithStatus('created');
     await createdRows.first().waitFor();
