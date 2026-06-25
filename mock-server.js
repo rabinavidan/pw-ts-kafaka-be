@@ -593,6 +593,12 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { id: orderDel[1], deleted: true });
   }
 
+  // DELETE /api/v1/payments — truncate all (test-only helper)
+  if (method === 'DELETE' && path === '/api/v1/payments') {
+    const { rowCount } = await dbQuery('payments', 'DELETE', 'DELETE FROM payments');
+    return send(res, 200, { deleted: rowCount ?? 0 });
+  }
+
   // DELETE /api/v1/payments/:id
   const paymentDel = path.match(/^\/api\/v1\/payments\/([^/]+)$/);
   if (method === 'DELETE' && paymentDel) {

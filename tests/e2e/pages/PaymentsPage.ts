@@ -51,7 +51,7 @@ export class PaymentsPage {
     this.selectMethod      = page.getByTestId('select-payment-method');
     this.cbSimulateFailure = page.getByTestId('cb-simulate-failure');
     this.formError         = page.getByTestId('form-error');
-    this.toast             = page.getByTestId('toast');
+    this.toast             = page.getByTestId('toast').first();
     this.toastMessage      = page.getByTestId('toast-message');
     this.btnCancelModal    = page.getByTestId('btn-cancel-modal');
     this.btnSubmitPayment  = page.getByTestId('btn-submit-payment');

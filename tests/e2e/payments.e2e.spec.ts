@@ -62,11 +62,12 @@ test.describe('Payments — create', () => {
   });
 
   test('modal close button dismisses without creating', async ({ paymentsPage }) => {
+    const countBefore = await paymentsPage.rows().count();
     await paymentsPage.openNewPaymentModal();
     await paymentsPage.inputOrderId.fill(crypto.randomUUID());
     await paymentsPage.modalClose.click();
     await expect(paymentsPage.modal).not.toBeVisible();
-    await expect(paymentsPage.emptyState).toBeVisible();
+    expect(await paymentsPage.rows().count()).toBe(countBefore);
   });
 });
 
@@ -119,6 +120,10 @@ test.describe('Payments — process & refund & fail (single)', () => {
 });
 
 test.describe('Payments — filter pills', () => {
+  test.beforeAll(async ({ request }) => {
+    await request.delete('http://localhost:3000/api/v1/payments');
+  });
+
   test('all filter pills are present', async ({ paymentsPage }) => {
     for (const status of ['all', 'pending', 'processed', 'refunded', 'failed'] as const) {
       await expect(paymentsPage.filterPill(status)).toBeVisible();

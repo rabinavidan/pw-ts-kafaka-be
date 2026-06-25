@@ -60,6 +60,20 @@ jobs:
     needs: lint
 
     services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: mockuser
+          POSTGRES_PASSWORD: mockpass
+          POSTGRES_DB: mockdb
+        options: >-
+          --health-cmd "pg_isready -U mockuser -d mockdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
       zookeeper:
         image: confluentinc/cp-zookeeper:7.6.0
         ports:
@@ -105,6 +119,11 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Apply DB schema
+        run: psql -h localhost -U mockuser -d mockdb -f db/init.sql
+        env:
+          PGPASSWORD: mockpass
+
       - name: Create Kafka topics
         run: |
           for topic in orders payments notifications dead-letter-queue audit-events; do
@@ -115,11 +134,17 @@ jobs:
           done
 
       - name: Run backend tests
-        run: npm test
+        run: npx playwright test --project=api --project=kafka --project=integration
         env:
           CI: true
           KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
           API_BASE_URL: ${{ env.API_BASE_URL }}
+          PORT: 3000
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
 
       - name: Generate HTML report
         if: always()
@@ -235,6 +260,52 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, ui-build]
 
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: mockuser
+          POSTGRES_PASSWORD: mockpass
+          POSTGRES_DB: mockdb
+        options: >-
+          --health-cmd "pg_isready -U mockuser -d mockdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.6.0
+        ports:
+          - 2181:2181
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+        options: >-
+          --health-cmd "nc -z localhost 2181"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      kafka:
+        image: confluentinc/cp-kafka:7.6.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 15
+          --health-start-period 30s
+
     steps:
       - uses: actions/checkout@v4
 
@@ -252,10 +323,21 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Apply DB schema
+        run: psql -h localhost -U mockuser -d mockdb -f db/init.sql
+        env:
+          PGPASSWORD: mockpass
+
       - name: Run E2E tests
         run: npm run test:e2e
         env:
           CI: true
+          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
 
       - name: Write job summary
         if: always()
