@@ -239,6 +239,12 @@ export function PaymentsPanel({ onToast }: Props) {
           <div className="empty-icon">⏳</div>
           <div className="empty-title">Loading payments…</div>
         </div>
+      ) : visible.length === 0 && filter !== 'all' ? (
+        <div className="empty-state" data-testid="payments-filter-empty">
+          <div className="empty-icon">🔍</div>
+          <div className="empty-title">No {filter} payments</div>
+          <div className="empty-sub">Try a different filter or create a new payment</div>
+        </div>
       ) : visible.length === 0 ? (
         <div className="empty-state" data-testid="payments-empty">
           <div className="empty-icon">💳</div>
