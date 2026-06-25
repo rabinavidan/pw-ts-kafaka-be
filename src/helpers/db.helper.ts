@@ -1,4 +1,4 @@
-import { Pool, QueryResult } from 'pg';
+import { Pool, QueryResult, QueryResultRow } from 'pg';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -98,7 +98,7 @@ export class DbHelper {
     await this.pool.end();
   }
 
-  async query<T = unknown>(sql: string, params: unknown[] = []): Promise<QueryResult<T>> {
+  async query<T extends QueryResultRow = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<QueryResult<T>> {
     return this.pool.query<T>(sql, params);
   }
 
