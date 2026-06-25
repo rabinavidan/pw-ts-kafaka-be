@@ -11,7 +11,8 @@ interface TestFixtures {
 }
 
 export const test = base.extend<TestFixtures>({
-  kafka: async (_: object, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  kafka: async ({}: object, use) => {
     const kafkaHelper = new KafkaHelper();
     await kafkaHelper.connect();
     logger.info('Kafka fixture: connected');
@@ -27,7 +28,8 @@ export const test = base.extend<TestFixtures>({
     await use(apiHelper);
   },
 
-  db: async (_: object, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  db: async ({}: object, use) => {
     const dbHelper = new DbHelper();
     await dbHelper.connect();
     logger.info('DB fixture: connected');
