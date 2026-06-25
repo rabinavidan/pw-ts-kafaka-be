@@ -62,11 +62,12 @@ test.describe('Payments — create', () => {
   });
 
   test('modal close button dismisses without creating', async ({ paymentsPage }) => {
+    const countBefore = await paymentsPage.rows().count();
     await paymentsPage.openNewPaymentModal();
     await paymentsPage.inputOrderId.fill(crypto.randomUUID());
     await paymentsPage.modalClose.click();
     await expect(paymentsPage.modal).not.toBeVisible();
-    await expect(paymentsPage.emptyState).toBeVisible();
+    expect(await paymentsPage.rows().count()).toBe(countBefore);
   });
 });
 
