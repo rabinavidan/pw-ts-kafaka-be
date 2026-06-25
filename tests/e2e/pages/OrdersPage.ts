@@ -15,6 +15,9 @@ export class OrdersPage {
   readonly btnBulkCancel:    Locator;
   readonly btnBulkDelete:    Locator;
   readonly btnDeselectAll:   Locator;
+  // Toast notifications
+  readonly toast:            Locator;
+  readonly toastMessage:     Locator;
   // Modal
   readonly modal:            Locator;
   readonly modalClose:       Locator;
@@ -48,6 +51,8 @@ export class OrdersPage {
     this.itemsList      = page.getByTestId('items-list');
     this.btnAddItem     = page.getByTestId('btn-add-item');
     this.formError      = page.getByTestId('form-error');
+    this.toast          = page.getByTestId('toast');
+    this.toastMessage   = page.getByTestId('toast-message');
     this.btnCancelModal = page.getByTestId('btn-cancel-modal');
     this.btnSubmitOrder = page.getByTestId('btn-submit-order');
   }

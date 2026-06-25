@@ -7,10 +7,10 @@ test.beforeEach(async ({ page, header }) => {
 
 test.describe('Payments — layout', () => {
   test('Payments panel is visible after tab switch', async ({ paymentsPage }) => {
-    await expect(paymentsPage.panel).toBeVisible();
-    await expect(paymentsPage.btnNewPayment).toBeVisible();
-    await expect(paymentsPage.btnBulkCreate).toBeVisible();
-    await expect(paymentsPage.filterPills).toBeVisible();
+    await expect.soft(paymentsPage.panel).toBeVisible();
+    await expect.soft(paymentsPage.btnNewPayment).toBeVisible();
+    await expect.soft(paymentsPage.btnBulkCreate).toBeVisible();
+    await expect.soft(paymentsPage.filterPills).toBeVisible();
   });
 
   test('empty state is shown when no payments exist', async ({ paymentsPage }) => {
@@ -32,11 +32,11 @@ test.describe('Payments — create', () => {
     await expect(paymentsPage.formError).toContainText('Order ID is required');
   });
 
-  test('creates a payment and shows it in the table', async ({ page, paymentsPage }) => {
+  test('creates a payment and shows it in the table', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
 
-    await expect(page.getByTestId('toast')).toBeVisible();
-    await expect(page.getByTestId('toast-message')).toContainText('payment.initiated');
+    await expect(paymentsPage.toast).toBeVisible();
+    await expect(paymentsPage.toastMessage).toContainText('payment.initiated');
 
     await expect(paymentsPage.table).toBeVisible();
     expect(await paymentsPage.rows().count()).toBeGreaterThanOrEqual(1);
@@ -57,7 +57,7 @@ test.describe('Payments — create', () => {
     await paymentsPage.paymentRowCb(paymentId).check();
     await paymentsPage.btnBulkFail.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('failed');
+    await expect(paymentsPage.toastMessage.last()).toContainText('failed');
     await expect(paymentsPage.rowsWithStatus('failed').first()).toBeVisible();
   });
 
@@ -71,9 +71,9 @@ test.describe('Payments — create', () => {
 });
 
 test.describe('Payments — process & refund & fail (single)', () => {
-  test('processing a pending payment changes status to processed', async ({ page, paymentsPage }) => {
+  test('processing a pending payment changes status to processed', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -83,13 +83,13 @@ test.describe('Payments — process & refund & fail (single)', () => {
     await paymentsPage.paymentRowCb(paymentId).check();
     await paymentsPage.btnBulkProcess.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('processed');
+    await expect(paymentsPage.toastMessage.last()).toContainText('processed');
     await expect(paymentsPage.paymentStatus(paymentId)).toContainText('processed');
   });
 
-  test('refunding a pending payment changes status to refunded', async ({ page, paymentsPage }) => {
+  test('refunding a pending payment changes status to refunded', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -98,13 +98,13 @@ test.describe('Payments — process & refund & fail (single)', () => {
     await paymentsPage.paymentRowCb(paymentId).check();
     await paymentsPage.btnBulkRefund.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('refunded');
+    await expect(paymentsPage.toastMessage.last()).toContainText('refunded');
     await expect(paymentsPage.paymentStatus(paymentId)).toContainText('refunded');
   });
 
-  test('failing a pending payment changes status to failed', async ({ page, paymentsPage }) => {
+  test('failing a pending payment changes status to failed', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -113,7 +113,7 @@ test.describe('Payments — process & refund & fail (single)', () => {
     await paymentsPage.paymentRowCb(paymentId).check();
     await paymentsPage.btnBulkFail.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('failed');
+    await expect(paymentsPage.toastMessage.last()).toContainText('failed');
     await expect(paymentsPage.paymentStatus(paymentId)).toContainText('failed');
   });
 });
@@ -154,9 +154,9 @@ test.describe('Payments — filter pills', () => {
     await expect(paymentsPage.filterEmpty).toBeVisible();
   });
 
-  test('processed pill shows only processed payments', async ({ page, paymentsPage }) => {
+  test('processed pill shows only processed payments', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -164,7 +164,7 @@ test.describe('Payments — filter pills', () => {
 
     await paymentsPage.paymentRowCb(paymentId).check();
     await paymentsPage.btnBulkProcess.click();
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     await paymentsPage.filterPill('processed').click();
     await expect(paymentsPage.rowsWithStatus('processed').first()).toBeVisible();
@@ -189,51 +189,51 @@ test.describe('Payments — bulk selection', () => {
     await expect(paymentsPage.bulkBar).not.toBeVisible();
   });
 
-  test('bulk process moves all selected pending → processed', async ({ page, paymentsPage }) => {
+  test('bulk process moves all selected pending → processed', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
     await paymentsPage.createPayment(crypto.randomUUID());
 
     await paymentsPage.selectAll.check();
     await paymentsPage.btnBulkProcess.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('processed');
+    await expect(paymentsPage.toastMessage.last()).toContainText('processed');
   });
 
-  test('bulk refund moves all selected pending → refunded', async ({ page, paymentsPage }) => {
+  test('bulk refund moves all selected pending → refunded', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
     await paymentsPage.createPayment(crypto.randomUUID());
 
     await paymentsPage.selectAll.check();
     await paymentsPage.btnBulkRefund.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('refunded');
+    await expect(paymentsPage.toastMessage.last()).toContainText('refunded');
   });
 
-  test('bulk fail moves all selected pending → failed', async ({ page, paymentsPage }) => {
+  test('bulk fail moves all selected pending → failed', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
     await paymentsPage.createPayment(crypto.randomUUID());
 
     await paymentsPage.selectAll.check();
     await paymentsPage.btnBulkFail.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('failed');
+    await expect(paymentsPage.toastMessage.last()).toContainText('failed');
   });
 });
 
 test.describe('Payments — bulk create', () => {
-  test('Bulk ×10 creates 10 payments and shows success toast', async ({ page, paymentsPage }) => {
+  test('Bulk ×10 creates 10 payments and shows success toast', async ({ paymentsPage }) => {
     await paymentsPage.btnBulkCreate.click();
 
-    await expect(page.getByTestId('toast-message')).toContainText('10 payments created', { timeout: 30_000 });
+    await expect(paymentsPage.toastMessage).toContainText('10 payments created', { timeout: 30_000 });
 
     expect(await paymentsPage.rows().count()).toBeGreaterThanOrEqual(10);
   });
 });
 
 test.describe('Payments — delete', () => {
-  test('single delete removes payment row from table', async ({ page, paymentsPage }) => {
+  test('single delete removes payment row from table', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const rows = paymentsPage.rows();
     await rows.first().waitFor({ state: 'visible' });
@@ -241,13 +241,13 @@ test.describe('Payments — delete', () => {
 
     await paymentsPage.btnDeletePayment(paymentId).click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(paymentsPage.toastMessage.last()).toContainText('deleted');
     await expect(paymentsPage.paymentRow(paymentId)).not.toBeVisible();
   });
 
-  test('single delete works on processed payment', async ({ page, paymentsPage }) => {
+  test('single delete works on processed payment', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -259,11 +259,11 @@ test.describe('Payments — delete', () => {
 
     await paymentsPage.btnDeletePayment(paymentId).click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(paymentsPage.toastMessage.last()).toContainText('deleted');
     await expect(paymentsPage.paymentRow(paymentId)).not.toBeVisible();
   });
 
-  test('bulk delete removes all selected payments', async ({ page, paymentsPage }) => {
+  test('bulk delete removes all selected payments', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
     await paymentsPage.createPayment(crypto.randomUUID());
 
@@ -272,22 +272,22 @@ test.describe('Payments — delete', () => {
 
     await paymentsPage.btnBulkDelete.click();
 
-    await expect(page.getByTestId('toast-message').last()).toContainText('deleted');
+    await expect(paymentsPage.toastMessage.last()).toContainText('deleted');
     await expect(paymentsPage.bulkBar).not.toBeVisible();
   });
 
-  test('bulk delete hides bulk bar after completion', async ({ page, paymentsPage }) => {
+  test('bulk delete hides bulk bar after completion', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
     await paymentsPage.selectAll.check();
     await paymentsPage.btnBulkDelete.click();
 
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
     await expect(paymentsPage.bulkBar).not.toBeVisible();
   });
 
-  test('deleting a payment emits payment.deleted event in feed', async ({ page, paymentsPage, eventFeed }) => {
+  test('deleting a payment emits payment.deleted event in feed', async ({ paymentsPage, eventFeed }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const rows = paymentsPage.rows();
     await rows.first().waitFor();
@@ -307,9 +307,9 @@ test.describe('Payments — Kafka events', () => {
     await expect(eventFeed.eventsOfType('payment.initiated').first()).toBeVisible();
   });
 
-  test('processing a payment emits payment.processed event', async ({ page, paymentsPage, eventFeed }) => {
+  test('processing a payment emits payment.processed event', async ({ paymentsPage, eventFeed }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -322,9 +322,9 @@ test.describe('Payments — Kafka events', () => {
     await expect(eventFeed.eventsOfType('payment.processed').first()).toBeVisible();
   });
 
-  test('refunding a payment emits payment.refunded event', async ({ page, paymentsPage, eventFeed }) => {
+  test('refunding a payment emits payment.refunded event', async ({ paymentsPage, eventFeed }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
-    await expect(page.getByTestId('toast')).toBeVisible();
+    await expect(paymentsPage.toast).toBeVisible();
 
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -345,7 +345,7 @@ test.describe('Payments — Kafka events', () => {
 
     await paymentsPage.paymentRowCb(paymentId).check();
     await paymentsPage.btnBulkFail.click();
-    await expect(page.getByTestId('toast-message').last()).toContainText('failed');
+    await expect(paymentsPage.toastMessage.last()).toContainText('failed');
 
     await eventFeed.waitForEventType('payment.failed');
     await expect(eventFeed.eventsOfType('payment.failed').first()).toBeVisible();
