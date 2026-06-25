@@ -48,7 +48,7 @@ test.describe('Payments — create', () => {
     await expect(pendingRows.first()).toBeVisible();
   });
 
-  test('a payment can be moved to "failed" status', async ({ page, paymentsPage }) => {
+  test('a payment can be moved to "failed" status', async ({ paymentsPage }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();
@@ -337,7 +337,7 @@ test.describe('Payments — Kafka events', () => {
     await expect(eventFeed.eventsOfType('payment.refunded').first()).toBeVisible();
   });
 
-  test('failing a payment emits payment.failed event', async ({ page, paymentsPage, eventFeed }) => {
+  test('failing a payment emits payment.failed event', async ({ paymentsPage, eventFeed }) => {
     await paymentsPage.createPayment(crypto.randomUUID());
     const pendingRows = paymentsPage.rowsWithStatus('pending');
     await pendingRows.first().waitFor();

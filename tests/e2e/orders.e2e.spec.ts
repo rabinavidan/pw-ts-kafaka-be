@@ -44,7 +44,7 @@ test.describe('Orders — create', () => {
     await expect(ordersPage.formError).toContainText('All product IDs are required');
   });
 
-  test('creates an order and shows it in the table', async ({ ordersPage, eventFeed }) => {
+  test('creates an order and shows it in the table', async ({ ordersPage }) => {
     await ordersPage.createOrder('e2e-user-01', 'prod-e2e-01');
 
     await expect(ordersPage.toast).toBeVisible();
