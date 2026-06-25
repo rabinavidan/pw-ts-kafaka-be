@@ -120,6 +120,10 @@ test.describe('Payments — process & refund & fail (single)', () => {
 });
 
 test.describe('Payments — filter pills', () => {
+  test.beforeAll(async ({ request }) => {
+    await request.delete('http://localhost:3000/api/v1/payments');
+  });
+
   test('all filter pills are present', async ({ paymentsPage }) => {
     for (const status of ['all', 'pending', 'processed', 'refunded', 'failed'] as const) {
       await expect(paymentsPage.filterPill(status)).toBeVisible();
