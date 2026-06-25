@@ -1,8 +1,8 @@
 import { test, expect } from '../../src/fixtures';
 import { endpoints } from '../../src/config/api.config';
 import { Order, Payment } from '../../src/models/api.model';
-import { createOrderRequest, randomId } from '../../src/utils/data.factory';
-import { assertCreatedResponse, assertSuccessResponse } from '../../src/utils/assertion';
+import { createOrderRequest } from '../../src/utils/data.factory';
+import { assertCreatedResponse } from '../../src/utils/assertion';
 
 test.describe('DB Verification — Orders @regression', () => {
   test('creating an order persists a row in the orders table', async ({ api, db }) => {

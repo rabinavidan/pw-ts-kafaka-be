@@ -2,7 +2,7 @@ import { Kafka, Producer, Consumer, Admin, RecordMetadata, EachMessagePayload } 
 import { kafkaConfig, consumerConfig } from '../config/kafka.config';
 import { KafkaMessage, ConsumedMessage } from '../models/kafka.model';
 import { logger } from '../utils/logger';
-import { sleep, waitUntil } from '../utils/retry';
+import { waitUntil } from '../utils/retry';
 
 export class KafkaHelper {
   private readonly kafka: Kafka;

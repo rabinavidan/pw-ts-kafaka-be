@@ -2,6 +2,27 @@ import js from '@eslint/js';
 import tsPlugin from '@typescript-eslint/eslint-plugin';
 import tsParser from '@typescript-eslint/parser';
 
+const nodeGlobals = {
+  process: 'readonly',
+  Buffer: 'readonly',
+  __dirname: 'readonly',
+  __filename: 'readonly',
+  setTimeout: 'readonly',
+  clearTimeout: 'readonly',
+  setInterval: 'readonly',
+  clearInterval: 'readonly',
+  console: 'readonly',
+  URL: 'readonly',
+  URLSearchParams: 'readonly',
+  crypto: 'readonly',
+};
+
+const browserGlobals = {
+  document: 'readonly',
+  window: 'readonly',
+  navigator: 'readonly',
+};
+
 export default [
   js.configs.recommended,
   {
@@ -13,6 +34,7 @@ export default [
         ecmaVersion: 2022,
         sourceType: 'module',
       },
+      globals: { ...nodeGlobals, ...browserGlobals },
     },
     plugins: { '@typescript-eslint': tsPlugin },
     rules: {

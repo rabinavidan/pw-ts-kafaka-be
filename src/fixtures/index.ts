@@ -11,7 +11,7 @@ interface TestFixtures {
 }
 
 export const test = base.extend<TestFixtures>({
-  kafka: async ({}, use) => {
+  kafka: async (_: object, use) => {
     const kafkaHelper = new KafkaHelper();
     await kafkaHelper.connect();
     logger.info('Kafka fixture: connected');
@@ -27,7 +27,7 @@ export const test = base.extend<TestFixtures>({
     await use(apiHelper);
   },
 
-  db: async ({}, use) => {
+  db: async (_: object, use) => {
     const dbHelper = new DbHelper();
     await dbHelper.connect();
     logger.info('DB fixture: connected');
