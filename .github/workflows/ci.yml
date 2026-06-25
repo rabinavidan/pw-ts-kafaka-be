@@ -60,6 +60,20 @@ jobs:
     needs: lint
 
     services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: mockuser
+          POSTGRES_PASSWORD: mockpass
+          POSTGRES_DB: mockdb
+        options: >-
+          --health-cmd "pg_isready -U mockuser -d mockdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
       zookeeper:
         image: confluentinc/cp-zookeeper:7.6.0
         ports:
@@ -105,6 +119,11 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Apply DB schema
+        run: psql -h localhost -U mockuser -d mockdb -f db/init.sql
+        env:
+          PGPASSWORD: mockpass
+
       - name: Create Kafka topics
         run: |
           for topic in orders payments notifications dead-letter-queue audit-events; do
@@ -120,6 +139,11 @@ jobs:
           CI: true
           KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
           API_BASE_URL: ${{ env.API_BASE_URL }}
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
 
       - name: Generate HTML report
         if: always()
@@ -235,6 +259,21 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, ui-build]
 
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: mockuser
+          POSTGRES_PASSWORD: mockpass
+          POSTGRES_DB: mockdb
+        options: >-
+          --health-cmd "pg_isready -U mockuser -d mockdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -252,10 +291,20 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Apply DB schema
+        run: psql -h localhost -U mockuser -d mockdb -f db/init.sql
+        env:
+          PGPASSWORD: mockpass
+
       - name: Run E2E tests
         run: npm run test:e2e
         env:
           CI: true
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
 
       - name: Write job summary
         if: always()
