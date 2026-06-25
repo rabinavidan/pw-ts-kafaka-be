@@ -134,11 +134,12 @@ jobs:
           done
 
       - name: Run backend tests
-        run: npm test
+        run: npx playwright test --project=api --project=kafka --project=integration
         env:
           CI: true
           KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
           API_BASE_URL: ${{ env.API_BASE_URL }}
+          PORT: 3000
           PGHOST: localhost
           PGPORT: 5432
           PGDATABASE: mockdb
