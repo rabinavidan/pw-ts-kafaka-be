@@ -339,18 +339,55 @@ jobs:
           PGUSER: mockuser
           PGPASSWORD: mockpass
 
+      - name: Stage E2E report artifacts
+        # Both Playwright configs default outputDir to test-results/, which
+        # is wiped at the start of every run — stage outside it so the next
+        # invocation (UI smoke) doesn't delete these.
+        if: always()
+        run: |
+          mkdir -p report-artifacts
+          [ -d playwright-report-ui ] && mv playwright-report-ui report-artifacts/playwright-report-ui-e2e || true
+          [ -f test-results/ui-results.json ] && mv test-results/ui-results.json report-artifacts/ui-e2e-results.json || true
+
+      - name: Run UI smoke tests
+        if: always()
+        run: npm run test:ui-smoke
+        env:
+          CI: true
+          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
+
+      - name: Stage UI smoke report artifacts
+        if: always()
+        run: |
+          mkdir -p report-artifacts
+          [ -d playwright-report-ui ] && mv playwright-report-ui report-artifacts/playwright-report-ui-smoke || true
+          [ -f test-results/ui-results.json ] && mv test-results/ui-results.json report-artifacts/ui-smoke-results.json || true
+
       - name: Write job summary
         if: always()
-        run: node generate-summary.js test-results/ui-results.json >> $GITHUB_STEP_SUMMARY
+        run: node generate-summary.js report-artifacts/ui-e2e-results.json report-artifacts/ui-smoke-results.json >> $GITHUB_STEP_SUMMARY
         env:
-          SUMMARY_LABEL: E2E Tests — Orders & Payments
+          SUMMARY_LABEL: E2E Tests — Orders · Payments · UI Smoke
 
       - name: Upload E2E Playwright report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: e2e-playwright-report
-          path: playwright-report-ui/
+          path: report-artifacts/playwright-report-ui-e2e/
+          retention-days: 30
+
+      - name: Upload UI smoke Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-smoke-playwright-report
+          path: report-artifacts/playwright-report-ui-smoke/
           retention-days: 30
 
       - name: Upload E2E results JSON
@@ -358,14 +395,61 @@ jobs:
         if: always()
         with:
           name: e2e-results-json
-          path: test-results/ui-results.json
+          path: report-artifacts/ui-e2e-results.json
           retention-days: 30
 
-  # ── 6. Deploy to GitHub Pages (main only) ────────────────────────
+      - name: Upload UI smoke results JSON
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-smoke-results-json
+          path: report-artifacts/ui-smoke-results.json
+          retention-days: 30
+
+  # ── 6. Coverage — aggregate pass-rate across all test layers ─────
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: [test-be, test-db, test-e2e]
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*-results-json'
+          path: artifacts
+
+      - name: Aggregate coverage and gate on pass rate
+        run: |
+          node generate-coverage.js \
+            artifacts/be-results-json/results.json \
+            artifacts/db-results-json/results.json \
+            artifacts/e2e-results-json/ui-e2e-results.json \
+            artifacts/ui-smoke-results-json/ui-smoke-results.json \
+            --out=badges/tests.json \
+            --breakdown=badges/coverage.json \
+            --threshold=100 | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Upload coverage badges
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-badges
+          path: badges/
+          retention-days: 30
+
+  # ── 7. Deploy to GitHub Pages (main only) ────────────────────────
   deploy:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [test-be, test-db, test-e2e, ui-build]
+    needs: [test-be, test-db, test-e2e, ui-build, coverage]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     permissions:
@@ -377,17 +461,47 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
 
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
       - name: Download UI dist
         uses: actions/download-artifact@v4
         with:
           name: ui-dist
           path: dist/
 
-      - name: Download BE HTML report
+      - name: Download BE pretty HTML report
         uses: actions/download-artifact@v4
         with:
           name: be-test-report-html
           path: dist/reports/
+
+      - name: Download per-layer Playwright HTML reports
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/reports/
+          pattern: '*-playwright-report'
+
+      - name: Download coverage badges
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-badges
+          path: dist/badges/
+
+      - name: Rename report folders to short layer names
+        run: |
+          cd dist/reports
+          [ -d be-playwright-report ]       && mv be-playwright-report be
+          [ -d db-playwright-report ]       && mv db-playwright-report db
+          [ -d e2e-playwright-report ]      && mv e2e-playwright-report e2e
+          [ -d ui-smoke-playwright-report ] && mv ui-smoke-playwright-report ui-smoke
+          true
+
+      - name: Generate live report landing page
+        run: node generate-report-index.js dist/badges/coverage.json dist/reports/index.html
 
       - name: Configure Pages
         uses: actions/configure-pages@v4
