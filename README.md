@@ -1,6 +1,40 @@
-# pw-ts-kafka-be
+# Playwright · Kafka · Microservices — E2E Test Framework
 
-Playwright TypeScript automated test framework for backend APIs, Kafka message flows, and a React UI dashboard with full E2E coverage.
+A full-spectrum Playwright + TypeScript automation framework for an event-driven
+microservices stack: REST APIs, Kafka message flows, PostgreSQL and a React UI —
+with 214 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
+
+[![CI/CD](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml/badge.svg)](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml)
+[![Playwright](https://img.shields.io/badge/tested%20with-Playwright-2EAD33?logo=playwright&logoColor=white)](https://playwright.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Kafka](https://img.shields.io/badge/Apache%20Kafka-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
+
+## At a glance
+
+- **214 tests across 7 layers** — API contract, DB-direct, Kafka producer/consumer,
+  integration pipeline, microservices, and UI E2E with a Page Object Model.
+- **Event-driven microservices** — gateway + orders, payments, events and
+  notification services over Kafka, with a shared PostgreSQL `event_log`.
+- **Full CI/CD** — lint and type-check, UI build, parallel test jobs (backend, DB,
+  E2E) and an auto-published test report.
+- **Runs anywhere** — single-command local mode (mock server), full microservices
+  mode, or Kubernetes (12 manifests included).
+
+## Test layers
+
+| Layer          | Tests   | What it covers                                            |
+|----------------|---------|------------------------------------------------------------|
+| API            | 34      | REST contract testing against the gateway/services         |
+| DB             | 47      | Direct PostgreSQL: CRUD, constraints, defaults, upserts     |
+| Kafka          | 14      | Producer/consumer flows and topic behavior                 |
+| Integration    | 9       | Cross-service pipeline verification                        |
+| Microservices  | 43      | Per-service behavior in microservices mode                 |
+| E2E (UI)       | 61      | Browser-level React dashboard flows (POM + data-testid)    |
+| UI (component) | 6       | Focused UI checks                                           |
+| **Total**      | **214** | across 20 spec files                                        |
+
+Run a single layer with its Playwright project, e.g. `npx playwright test --project=kafka`.
 
 ## Overview
 
