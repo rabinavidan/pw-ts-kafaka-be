@@ -2,17 +2,20 @@
 
 A full-spectrum Playwright + TypeScript automation framework for an event-driven
 microservices stack: REST APIs, Kafka message flows, PostgreSQL and a React UI —
-with 214 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
+with 220 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 
 [![CI/CD](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml/badge.svg)](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/endpoint?url=https://rabinavidan.github.io/playwright-kafka-microservices/badges/tests.json)](https://rabinavidan.github.io/playwright-kafka-microservices/reports/)
 [![Playwright](https://img.shields.io/badge/tested%20with-Playwright-2EAD33?logo=playwright&logoColor=white)](https://playwright.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Kafka](https://img.shields.io/badge/Apache%20Kafka-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io)
 
+**[→ Live test report](https://rabinavidan.github.io/playwright-kafka-microservices/reports/)** — the Playwright HTML report from the latest run on `main`, per layer.
+
 ## At a glance
 
-- **214 tests across 7 layers** — API contract, DB-direct, Kafka producer/consumer,
+- **220 tests across 7 layers** — API contract, DB-direct, Kafka producer/consumer,
   integration pipeline, microservices, and UI E2E with a Page Object Model.
 - **Event-driven microservices** — gateway + orders, payments, events and
   notification services over Kafka, with a shared PostgreSQL `event_log`.
@@ -31,8 +34,8 @@ with 214 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 | Integration    | 9       | Cross-service pipeline verification                        |
 | Microservices  | 43      | Per-service behavior in microservices mode                 |
 | E2E (UI)       | 61      | Browser-level React dashboard flows (POM + data-testid)    |
-| UI (component) | 6       | Focused UI checks                                           |
-| **Total**      | **214** | across 20 spec files                                        |
+| UI (component) | 12      | Dashboard smoke checks — layout, filters, order/payment lifecycle |
+| **Total**      | **220** | across 20 spec files                                        |
 
 Run a single layer with its Playwright project, e.g. `npx playwright test --project=kafka`.
 
@@ -271,7 +274,11 @@ The E2E suite starts `mock-server.js` and the Vite dev server automatically befo
 npm run test:e2e
 ```
 
-This runs the `e2e-orders` and `e2e-payments` Playwright projects defined in `playwright.ui.config.ts`.
+This runs the `e2e-orders` and `e2e-payments` Playwright projects defined in `playwright.ui.config.ts`. The `ui-smoke` project (dashboard-level smoke checks) runs separately:
+
+```bash
+npm run test:ui-smoke
+```
 
 ### Start the UI dashboard locally
 
@@ -504,6 +511,8 @@ lint              ui-build
   │                  │
   └──── test-e2e ────┘
               │
+          coverage
+              │
            deploy   ← main branch only
 ```
 
@@ -513,10 +522,11 @@ lint              ui-build
 |-----|----------|-------------|
 | `lint` | push / PR | ESLint + `tsc --noEmit` |
 | `ui-build` | push / PR | `vite build` — uploads `ui-dist` artifact |
-| `test-be` | after `lint` | Spins up Kafka services, runs `npm test` (40 tests), generates HTML report + job summary |
+| `test-be` | after `lint` | Spins up Kafka services, runs `api` + `kafka` + `integration` projects (57 tests), generates HTML report + job summary |
 | `test-db` | after `lint` | Spins up PostgreSQL 16, applies schema, runs `npm run test:db` (47 tests), generates job summary |
-| `test-e2e` | after `lint` + `ui-build` | Runs `npm run test:e2e` (51 tests) with mock server + Vite via `webServer`, generates job summary |
-| `deploy` | after all four pass, main only | Deploys UI to GitHub Pages, includes BE test report |
+| `test-e2e` | after `lint` + `ui-build` | Runs `npm run test:e2e` (`e2e-orders` + `e2e-payments`, 61 tests) then `npm run test:ui-smoke` (12 tests) against mock server + Vite via `webServer`, generates job summary |
+| `coverage` | after all three test jobs, always runs | Aggregates pass/fail across every layer into a shields.io badge + per-layer breakdown, fails the job if the pass rate drops below the configured threshold |
+| `deploy` | after everything passes, main only | Publishes the UI, the coverage badge, and every layer's Playwright HTML report to GitHub Pages |
 
 ### Job summaries
 
@@ -537,8 +547,20 @@ The summary includes: total / passed / failed / skipped counts, pass rate, and a
 | `be-results-json` | `test-results/results.json` for downstream tooling |
 | `db-playwright-report` | Playwright HTML report for DB layer tests |
 | `db-results-json` | `test-results/results.json` from the DB job |
-| `e2e-playwright-report` | Playwright HTML report for E2E tests (with screenshots & video on failure) |
-| `e2e-results-json` | `test-results/ui-results.json` |
+| `e2e-playwright-report` | Playwright HTML report for `e2e-orders` + `e2e-payments` (with screenshots & video on failure) |
+| `e2e-results-json` | Results JSON for `e2e-orders` + `e2e-payments` |
+| `ui-smoke-playwright-report` | Playwright HTML report for the `ui-smoke` project |
+| `ui-smoke-results-json` | Results JSON for the `ui-smoke` project |
+| `coverage-badges` | `tests.json` (shields.io endpoint badge) + `coverage.json` (per-layer pass-rate breakdown) |
+
+### Coverage gate
+
+The `coverage` job (`generate-coverage.js`) merges every layer's results JSON, computes an overall pass rate (`passed / (total - skipped)`), and fails the job if that rate drops below `--threshold` (currently 100% — see the `Aggregate coverage and gate on pass rate` step in `ci.yml`). It also writes:
+
+- `badges/tests.json` — a [shields.io endpoint badge](https://shields.io/badges/endpoint-badge) payload, published to Pages and used by the **Tests** badge at the top of this README.
+- `badges/coverage.json` — a per-layer breakdown (total/passed/failed/pass rate), consumed by `generate-report-index.js` to build the [live report landing page](https://rabinavidan.github.io/playwright-kafka-microservices/reports/).
+
+Raise the threshold over time as coverage and stability improve — it intentionally starts at the suite's current pass rate rather than an aspirational number.
 
 ---
 
@@ -553,8 +575,10 @@ The summary includes: total / passed / failed / skipped counts, pass rate, and a
 | `npm run test:integration` | Integration tests only |
 | `npm run test:smoke` | `@smoke`-tagged tests |
 | `npm run test:regression` | `@regression`-tagged tests |
-| `npm run test:e2e` | E2E UI tests (auto-starts mock server + Vite) |
+| `npm run test:e2e` | E2E UI tests — `e2e-orders` + `e2e-payments` (auto-starts mock server + Vite) |
+| `npm run test:ui-smoke` | UI smoke checks — `ui-smoke` project (auto-starts mock server + Vite) |
 | `npm run test:report` | Open Playwright HTML report |
+| `npm run coverage` | Aggregate one or more results JSON files into a pass-rate badge (`generate-coverage.js`) |
 | `npm run dev` | Start monolith mock-server + Vite dev server (local dev) |
 | `npm run dev:services` | Start all 5 microservices concurrently (no UI) |
 | `npm run dev:all` | Start all 5 microservices + Vite dev server |
@@ -563,7 +587,7 @@ The summary includes: total / passed / failed / skipped counts, pass rate, and a
 | `npm run lint` | ESLint |
 | `npm run lint:fix` | ESLint with auto-fix |
 | `npm run type-check` | TypeScript strict mode check |
-| `npm run clean` | Remove `test-results`, `playwright-report`, `playwright-report-ui` |
+| `npm run clean` | Remove generated test/report/coverage output |
 
 ---
 
