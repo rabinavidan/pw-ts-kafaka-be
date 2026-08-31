@@ -55,6 +55,25 @@ export class KafkaHelper {
     return result;
   }
 
+  /**
+   * Sends a raw, un-encoded string as the message value — unlike produce(),
+   * this does NOT JSON.stringify it. Used to construct a genuinely
+   * malformed/unparseable message body (a "poison message") for resilience
+   * tests; produce() can't do this since JSON.stringify('anything') is
+   * always valid JSON.
+   */
+  async produceRaw(topic: string, key: string, rawValue: string, headers?: Record<string, string>): Promise<RecordMetadata[]> {
+    if (!this.producer) throw new Error('Producer not connected. Call connect() first.');
+
+    const result = await this.producer.send({
+      topic,
+      messages: [{ key, value: rawValue, headers, timestamp: Date.now().toString() }],
+    });
+
+    logger.info(`Produced raw message to ${topic}`, { key, partition: result[0]?.partition });
+    return result;
+  }
+
   async produceMany<T>(topic: string, messages: KafkaMessage<T>[]): Promise<RecordMetadata[]> {
     if (!this.producer) throw new Error('Producer not connected. Call connect() first.');
 

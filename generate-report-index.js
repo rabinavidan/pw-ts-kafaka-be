@@ -22,10 +22,11 @@ try {
 }
 
 const REPORTS = [
-  { dir: 'be',       label: 'Backend',    desc: 'API · Kafka · Integration' },
-  { dir: 'db',       label: 'DB Layer',   desc: 'Direct PostgreSQL tests' },
-  { dir: 'e2e',      label: 'E2E (UI)',   desc: 'Orders & Payments dashboard flows' },
-  { dir: 'ui-smoke', label: 'UI Smoke',   desc: 'Dashboard smoke checks' },
+  { dir: 'be',            label: 'Backend',        desc: 'API · Kafka · Integration' },
+  { dir: 'microservices', label: 'Microservices',   desc: 'Gateway + orders/payments/events/notifications, idempotency, DLQ, contracts' },
+  { dir: 'db',            label: 'DB Layer',        desc: 'Direct PostgreSQL tests' },
+  { dir: 'e2e',           label: 'E2E (UI)',        desc: 'Orders & Payments dashboard flows' },
+  { dir: 'ui-smoke',      label: 'UI Smoke',        desc: 'Dashboard smoke checks' },
 ];
 
 const { overall } = coverage;
