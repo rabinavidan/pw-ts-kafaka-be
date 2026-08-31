@@ -180,7 +180,156 @@ jobs:
           path: test-results/results.json
           retention-days: 30
 
-  # ── 4. DB layer tests (pure PostgreSQL — no API, no Kafka) ─────────
+  # ── 4. Microservices stack (gateway + orders/payments/events/notifications) ──
+  test-microservices:
+    name: Microservices Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    services:
+      postgres:
+        image: postgres:16
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: mockuser
+          POSTGRES_PASSWORD: mockpass
+          POSTGRES_DB: mockdb
+        options: >-
+          --health-cmd "pg_isready -U mockuser -d mockdb"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.6.0
+        ports:
+          - 2181:2181
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+        options: >-
+          --health-cmd "nc -z localhost 2181"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      kafka:
+        image: confluentinc/cp-kafka:7.6.0
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:9092 --list"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 15
+          --health-start-period 30s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Apply DB schema
+        run: psql -h localhost -U mockuser -d mockdb -f db/init.sql
+        env:
+          PGPASSWORD: mockpass
+
+      - name: Create Kafka topics
+        run: |
+          for topic in orders payments notifications dead-letter-queue audit-events; do
+            docker run --rm --network host confluentinc/cp-kafka:7.6.0 \
+              kafka-topics --bootstrap-server localhost:9092 \
+              --create --if-not-exists --topic $topic \
+              --partitions 3 --replication-factor 1
+          done
+
+      - name: Start microservices stack
+        run: |
+          npm run dev:services > /tmp/microservices.log 2>&1 &
+          disown
+        env:
+          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
+
+      - name: Wait for microservices to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s http://localhost:3000/health | node -pe "try{JSON.parse(require('fs').readFileSync(0)).status}catch{'unreachable'}" 2>/dev/null || echo unreachable)
+            if [ "$STATUS" = "healthy" ]; then
+              echo "Microservices stack is healthy"
+              exit 0
+            fi
+            echo "Waiting for microservices stack... ($i/30, status=$STATUS)"
+            sleep 2
+          done
+          echo "Microservices stack did not become healthy in time"
+          curl -s http://localhost:3000/health || true
+          exit 1
+
+      - name: Run microservices tests
+        run: npm run test:microservices
+        env:
+          CI: true
+          KAFKA_BROKERS: ${{ env.KAFKA_BROKERS }}
+          API_BASE_URL: http://localhost:3000
+          PGHOST: localhost
+          PGPORT: 5432
+          PGDATABASE: mockdb
+          PGUSER: mockuser
+          PGPASSWORD: mockpass
+
+      - name: Write job summary
+        if: always()
+        run: node generate-summary.js test-results/results.json >> $GITHUB_STEP_SUMMARY
+        env:
+          SUMMARY_LABEL: Microservices Tests — gateway · orders · payments · events · notifications
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: microservices-playwright-report
+          path: playwright-report/
+          retention-days: 30
+
+      - name: Upload results JSON
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: microservices-results-json
+          path: test-results/results.json
+          retention-days: 30
+
+      - name: Upload microservices log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: microservices-log
+          path: /tmp/microservices.log
+          retention-days: 7
+
+  # ── 5. DB layer tests (pure PostgreSQL — no API, no Kafka) ─────────
   test-db:
     name: DB Layer Tests
     runs-on: ubuntu-latest
@@ -254,7 +403,7 @@ jobs:
           path: test-results/results.json
           retention-days: 30
 
-  # ── 5. E2E tests (UI — Orders & Payments) ────────────────────────
+  # ── 6. E2E tests (UI — Orders & Payments) ────────────────────────
   test-e2e:
     name: E2E Tests (UI)
     runs-on: ubuntu-latest
@@ -406,11 +555,11 @@ jobs:
           path: report-artifacts/ui-smoke-results.json
           retention-days: 30
 
-  # ── 6. Coverage — aggregate pass-rate across all test layers ─────
+  # ── 7. Coverage — aggregate pass-rate across all test layers ─────
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    needs: [test-be, test-db, test-e2e]
+    needs: [test-be, test-microservices, test-db, test-e2e]
     if: always()
 
     steps:
@@ -430,6 +579,7 @@ jobs:
         run: |
           node generate-coverage.js \
             artifacts/be-results-json/results.json \
+            artifacts/microservices-results-json/results.json \
             artifacts/db-results-json/results.json \
             artifacts/e2e-results-json/ui-e2e-results.json \
             artifacts/ui-smoke-results-json/ui-smoke-results.json \
@@ -445,11 +595,11 @@ jobs:
           path: badges/
           retention-days: 30
 
-  # ── 7. Deploy to GitHub Pages (main only) ────────────────────────
+  # ── 8. Deploy to GitHub Pages (main only) ────────────────────────
   deploy:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [test-be, test-db, test-e2e, ui-build, coverage]
+    needs: [test-be, test-microservices, test-db, test-e2e, ui-build, coverage]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
 
     permissions:
@@ -494,10 +644,11 @@ jobs:
       - name: Rename report folders to short layer names
         run: |
           cd dist/reports
-          [ -d be-playwright-report ]       && mv be-playwright-report be
-          [ -d db-playwright-report ]       && mv db-playwright-report db
-          [ -d e2e-playwright-report ]      && mv e2e-playwright-report e2e
-          [ -d ui-smoke-playwright-report ] && mv ui-smoke-playwright-report ui-smoke
+          [ -d be-playwright-report ]            && mv be-playwright-report be
+          [ -d microservices-playwright-report ] && mv microservices-playwright-report microservices
+          [ -d db-playwright-report ]            && mv db-playwright-report db
+          [ -d e2e-playwright-report ]           && mv e2e-playwright-report e2e
+          [ -d ui-smoke-playwright-report ]      && mv ui-smoke-playwright-report ui-smoke
           true
 
       - name: Generate live report landing page

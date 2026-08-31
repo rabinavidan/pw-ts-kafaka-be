@@ -45,19 +45,37 @@ async function dbQuery(table, operation, sql, params = []) {
 
 const kafka    = new Kafka({ clientId: 'notification-service', brokers: BROKERS, logCreator: () => () => {} });
 const consumer = kafka.consumer({ groupId: 'notification-service-group' });
+const producer = kafka.producer({ allowAutoTopicCreation: true });
 
 let consumerReady = false;
+let producerReady = false;
 let messagesProcessed = 0;
+let messagesPoisoned = 0;
+
+async function publish(topic, key, value, headers = {}) {
+  if (!producerReady) {
+    serverLog('warn', SVC, `Kafka producer not ready — dropped event to ${topic}`, { topic, key });
+    return;
+  }
+  try {
+    await producer.send({ topic, messages: [{ key, value: JSON.stringify(value), headers }] });
+    serverLog('info', SVC, `Published to ${topic}`, { topic, key, eventType: headers['event-type'] });
+  } catch (err) {
+    serverLog('error', SVC, `Failed to publish to ${topic}: ${err.message}`, { topic, key });
+  }
+}
 
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_log (
       id VARCHAR(36) PRIMARY KEY, topic VARCHAR(255) NOT NULL, key VARCHAR(255),
-      event_type VARCHAR(255) NOT NULL, payload JSONB NOT NULL,
+      event_type VARCHAR(255) NOT NULL, payload JSONB NOT NULL, dedupe_key VARCHAR(600),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  await pool.query(`ALTER TABLE event_log ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(600)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_topic   ON event_log (topic)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_created ON event_log (created_at DESC)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_event_log_dedupe_key ON event_log (dedupe_key) WHERE dedupe_key IS NOT NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kafka_consumer_offsets (
       consumer_group VARCHAR(255) NOT NULL, topic VARCHAR(255) NOT NULL, partition INTEGER NOT NULL,
@@ -75,6 +93,14 @@ async function initDB() {
 
 async function connectKafka() {
   try {
+    await producer.connect();
+    producerReady = true;
+    serverLog('info', SVC, 'Kafka producer connected');
+  } catch (err) {
+    serverLog('warn', SVC, `Kafka producer unavailable: ${err.message}`);
+  }
+
+  try {
     await consumer.connect();
     for (const topic of TOPICS) {
       await consumer.subscribe({ topic, fromBeginning: false });
@@ -86,16 +112,44 @@ async function connectKafka() {
       eachMessage: async ({ topic, partition, message }) => {
         const key       = message.key?.toString() || null;
         const eventType = message.headers?.['event-type']?.toString() || 'unknown';
-        let payload     = {};
-        try { payload = message.value ? JSON.parse(message.value.toString()) : {}; } catch {}
+        const rawValue  = message.value ? message.value.toString() : null;
 
-        serverLog('info', SVC, `Consumed ${eventType} from ${topic}`, { topic, partition, key, eventType });
+        let payload;
+        let parseError = null;
+        try { payload = rawValue ? JSON.parse(rawValue) : {}; } catch (err) { parseError = err; }
 
-        await dbQuery('event_log', 'INSERT',
-          `INSERT INTO event_log (id, topic, key, event_type, payload)
-           VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING`,
-          [randomUUID(), topic, key, eventType, payload]
-        ).catch(err => serverLog('warn', SVC, `event_log insert failed: ${err.message}`, { topic, eventType }));
+        if (parseError) {
+          // Poison message: the body isn't valid JSON, so there's nothing sensible to
+          // log as an event. Route it to the DLQ (with the failure reason attached) and
+          // keep consuming — a bad message must never take the consumer down.
+          messagesPoisoned++;
+          serverLog('warn', SVC, `Poison message on ${topic}: ${parseError.message}`, { topic, partition, key, eventType });
+          await publish('dead-letter-queue', key, {
+            originalTopic: topic,
+            originalPartition: partition,
+            originalOffset: message.offset,
+            originalEventType: eventType,
+            rawValue: rawValue ? rawValue.slice(0, 2000) : null,
+            failureReason: 'invalid_json',
+            error: parseError.message,
+            failedAt: new Date().toISOString(),
+          }, { 'event-type': 'message.poisoned', 'original-topic': topic });
+        } else {
+          serverLog('info', SVC, `Consumed ${eventType} from ${topic}`, { topic, partition, key, eventType });
+
+          // Dedupe on (topic, eventType, key) — a redelivered/duplicate message for the
+          // same logical event is a no-op instead of a second event_log row. Messages
+          // without a key (or two genuinely different event types for the same key,
+          // e.g. order.created then order.confirmed) are never deduped against each other.
+          const dedupeKey = key ? `${topic}:${eventType}:${key}` : null;
+
+          await dbQuery('event_log', 'INSERT',
+            `INSERT INTO event_log (id, topic, key, event_type, payload, dedupe_key)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+            [randomUUID(), topic, key, eventType, payload, dedupeKey]
+          ).catch(err => serverLog('warn', SVC, `event_log insert failed: ${err.message}`, { topic, eventType }));
+        }
 
         await dbQuery('kafka_consumer_offsets', 'UPSERT',
           `INSERT INTO kafka_consumer_offsets (consumer_group, topic, partition, committed_offset, updated_at)
@@ -123,7 +177,7 @@ async function start() {
     res.end(JSON.stringify({
       status: 'healthy', service: 'notification-service', version: '2.0.0',
       uptime: Math.floor((Date.now() - startTime) / 1000),
-      consumerReady, messagesProcessed,
+      consumerReady, producerReady, messagesProcessed, messagesPoisoned,
     }));
   }).listen(HEALTH_PORT, () => serverLog('info', SVC, `Health on port ${HEALTH_PORT}`));
 
@@ -131,4 +185,8 @@ async function start() {
 }
 
 start().catch(err => { console.error('[notifications] Fatal:', err.message); process.exit(1); });
-process.on('SIGTERM', async () => { await consumer.disconnect().catch(() => {}); await pool.end().catch(() => {}); });
+process.on('SIGTERM', async () => {
+  await consumer.disconnect().catch(() => {});
+  await producer.disconnect().catch(() => {});
+  await pool.end().catch(() => {});
+});

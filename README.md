@@ -2,7 +2,7 @@
 
 A full-spectrum Playwright + TypeScript automation framework for an event-driven
 microservices stack: REST APIs, Kafka message flows, PostgreSQL and a React UI —
-with 220 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
+with 236 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 
 [![CI/CD](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml/badge.svg)](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/endpoint?url=https://rabinavidan.github.io/playwright-kafka-microservices/badges/tests.json)](https://rabinavidan.github.io/playwright-kafka-microservices/reports/)
@@ -15,12 +15,16 @@ with 220 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 
 ## At a glance
 
-- **220 tests across 7 layers** — API contract, DB-direct, Kafka producer/consumer,
+- **236 tests across 7 layers** — API contract, DB-direct, Kafka producer/consumer,
   integration pipeline, microservices, and UI E2E with a Page Object Model.
 - **Event-driven microservices** — gateway + orders, payments, events and
   notification services over Kafka, with a shared PostgreSQL `event_log`.
-- **Full CI/CD** — lint and type-check, UI build, parallel test jobs (backend, DB,
-  E2E) and an auto-published test report.
+- **Resilience under the hood** — idempotent Kafka consumption, dead-letter routing
+  for poison messages, per-event-type producer/consumer contracts, and negative
+  sagas (failed payments, orphaned state) tested end to end against the real
+  microservices stack.
+- **Full CI/CD** — lint and type-check, UI build, parallel test jobs (backend,
+  microservices, DB, E2E) and an auto-published test report.
 - **Runs anywhere** — single-command local mode (mock server), full microservices
   mode, or Kubernetes (12 manifests included).
 
@@ -32,10 +36,10 @@ with 220 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 | DB             | 47      | Direct PostgreSQL: CRUD, constraints, defaults, upserts     |
 | Kafka          | 14      | Producer/consumer flows and topic behavior                 |
 | Integration    | 9       | Cross-service pipeline verification                        |
-| Microservices  | 43      | Per-service behavior in microservices mode                 |
+| Microservices  | 59      | Per-service behavior, idempotency, DLQ, event contracts, negative sagas |
 | E2E (UI)       | 61      | Browser-level React dashboard flows (POM + data-testid)    |
 | UI (component) | 12      | Dashboard smoke checks — layout, filters, order/payment lifecycle |
-| **Total**      | **220** | across 20 spec files                                        |
+| **Total**      | **236** | across 24 spec files                                        |
 
 Run a single layer with its Playwright project, e.g. `npx playwright test --project=kafka`.
 
@@ -368,6 +372,13 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 │   ├── integration/
 │   │   ├── order-pipeline.spec.ts    # API action → Kafka event verification
 │   │   └── data-pipeline.spec.ts     # Throughput, audit trail, trace-id correlation
+│   ├── microservices/                 # ★ Full stack — gateway + 4 services, real Kafka
+│   │   ├── orders-service.spec.ts, payments-service.spec.ts,
+│   │   │   events-service.spec.ts, notifications-service.spec.ts
+│   │   ├── idempotency.spec.ts       # 3 tests: duplicate Kafka messages processed once
+│   │   ├── dead-letter-queue.spec.ts # 4 tests: poison messages, DLQ contract
+│   │   ├── event-contracts.spec.ts   # 6 tests: producer output vs. consumer expectation
+│   │   └── negative-sagas.spec.ts    # 3 tests: failed payments, orphaned state
 │   └── e2e/
 │       ├── pages/                    # Page Object Model layer
 │       │   ├── HeaderPage.ts         # Nav tabs, health status
@@ -380,7 +391,7 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 │       └── payments.e2e.spec.ts      # 27 tests: create, process/refund/fail, filters, bulk, Kafka events
 │
 └── .github/workflows/
-    └── ci.yml                        # 5-job pipeline (see CI/CD section)
+    └── ci.yml                        # 8-job pipeline (see CI/CD section)
 ```
 
 ---
@@ -503,17 +514,15 @@ test('example', async ({ header, ordersPage, paymentsPage, eventFeed }) => {
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and pull request:
 
 ```
-lint              ui-build
-  │                  │
-  ├───── test-be ────┤
-  │                  │
-  ├───── test-db ────┤
-  │                  │
-  └──── test-e2e ────┘
-              │
-          coverage
-              │
-           deploy   ← main branch only
+lint ──┬── test-be ────────────┐
+       ├── test-microservices ─┤
+       ├── test-db ────────────┤
+       │                       │
+ui-build ── test-e2e ──────────┤
+                                │
+                            coverage
+                                │
+                             deploy   ← main branch only
 ```
 
 ### Jobs
@@ -523,9 +532,10 @@ lint              ui-build
 | `lint` | push / PR | ESLint + `tsc --noEmit` |
 | `ui-build` | push / PR | `vite build` — uploads `ui-dist` artifact |
 | `test-be` | after `lint` | Spins up Kafka services, runs `api` + `kafka` + `integration` projects (57 tests), generates HTML report + job summary |
+| `test-microservices` | after `lint` | Spins up Postgres + Kafka, starts the full gateway + orders/payments/events/notifications stack (`npm run dev:services`), runs the `microservices` project (59 tests — per-service behavior, idempotency, DLQ, event contracts, negative sagas), generates job summary |
 | `test-db` | after `lint` | Spins up PostgreSQL 16, applies schema, runs `npm run test:db` (47 tests), generates job summary |
 | `test-e2e` | after `lint` + `ui-build` | Runs `npm run test:e2e` (`e2e-orders` + `e2e-payments`, 61 tests) then `npm run test:ui-smoke` (12 tests) against mock server + Vite via `webServer`, generates job summary |
-| `coverage` | after all three test jobs, always runs | Aggregates pass/fail across every layer into a shields.io badge + per-layer breakdown, fails the job if the pass rate drops below the configured threshold |
+| `coverage` | after all four test jobs, always runs | Aggregates pass/fail across every layer into a shields.io badge + per-layer breakdown, fails the job if the pass rate drops below the configured threshold |
 | `deploy` | after everything passes, main only | Publishes the UI, the coverage badge, and every layer's Playwright HTML report to GitHub Pages |
 
 ### Job summaries
@@ -545,6 +555,9 @@ The summary includes: total / passed / failed / skipped counts, pass rate, and a
 | `be-playwright-report` | Playwright HTML report for backend tests |
 | `be-test-report-html` | Pretty single-file HTML report (`generate-report.js`) |
 | `be-results-json` | `test-results/results.json` for downstream tooling |
+| `microservices-playwright-report` | Playwright HTML report for the microservices stack |
+| `microservices-results-json` | Results JSON for the `microservices` project |
+| `microservices-log` | Combined stdout/stderr from the 5 background services, for debugging a failed run |
 | `db-playwright-report` | Playwright HTML report for DB layer tests |
 | `db-results-json` | `test-results/results.json` from the DB job |
 | `e2e-playwright-report` | Playwright HTML report for `e2e-orders` + `e2e-payments` (with screenshots & video on failure) |
@@ -621,6 +634,10 @@ npm run clean
 **Microservices with event-driven notification.** In Kubernetes, the API layer is split into five services behind an API gateway. Orders and payments services publish Kafka events and respond to HTTP immediately — they never write to `event_log`. The notification service is the sole Kafka consumer; it subscribes to all five topics and writes every consumed event to `event_log`. The events service reads `event_log` for the UI feed. This strict ownership means no service shares a write path to `event_log`, eliminating coupling without sagas. `mock-server.js` replicates the full behaviour in a single process for local dev and CI.
 
 **Kafka serialisation to avoid partition rebalancing.** The `kafka` and `integration` Playwright projects run with `workers: 1` so that concurrent consumer groups under parallel workers can't trigger broker-side partition rebalancing, which caused 15–20 s timeouts in earlier runs.
+
+**Idempotent consumption, not idempotent production.** The notification service dedupes on a `(topic, event-type, key)` identity computed at consume time (`event_log.dedupe_key`, a partial unique index) rather than relying on the message's own id — Kafka delivery is at-least-once, so a redelivered message is expected, not exceptional. A message that fails to parse as JSON is never silently dropped: it's routed to `dead-letter-queue` with the failure reason attached, and the consumer keeps running. Both are exercised end to end in `tests/microservices/idempotency.spec.ts` and `dead-letter-queue.spec.ts` against the real stack, not a mocked consumer.
+
+**One contract per event-type, enforced by a test, not a comment.** `src/utils/contract.ts` defines the required fields for every event-type this system publishes; `tests/microservices/event-contracts.spec.ts` checks real producer output against it. This is what caught a real bug during development: `payment.failed` was published with two different, incompatible payload shapes depending on which code path triggered it (`PUT /payments/:id/fail` vs. `simulateFailure` on create) — now fixed to share one shape.
 
 **Tag-based execution.** `@smoke` and `@regression` tags let the pipeline choose the right depth for each stage without maintaining separate config files.
 

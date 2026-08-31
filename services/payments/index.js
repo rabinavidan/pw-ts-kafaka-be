@@ -133,12 +133,21 @@ const server = http.createServer(async (req, res) => {
     if (!body.orderId)
       return send(res, 422, { code: 'VALIDATION_ERROR', message: 'orderId is required' });
 
+    // Payload mirrors the PUT /:id/fail contract below (same event-type,
+    // same required fields) so consumers don't have to branch on which path
+    // produced a payment.failed event.
     if (body.simulateFailure) {
-      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT * FROM orders WHERE id = $1`, [body.orderId]);
-      const order = orderRows[0] || { orderId: body.orderId };
-      send(res, 201, { id: randomUUID(), orderId: body.orderId, status: 'failed' });
+      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency FROM orders WHERE id = $1`, [body.orderId]);
+      const order    = orderRows[0];
+      const id       = randomUUID();
+      const amount   = body.amount ?? parseFloat(order?.amount ?? 100);
+      const currency = body.currency || order?.currency || 'USD';
+      const method   = body.method || 'credit_card';
+      const failedAt = new Date().toISOString();
+      send(res, 201, { id, orderId: body.orderId, status: 'failed' });
       publish('dead-letter-queue', body.orderId,
-        { originalEvent: order, failureReason: 'payment_failed', failedAt: new Date().toISOString() },
+        { paymentId: id, orderId: body.orderId, status: 'failed',
+          amount, currency, method, failureReason: 'payment_failed', failedAt },
         { 'event-type': 'payment.failed', 'original-topic': 'orders' });
       return;
     }

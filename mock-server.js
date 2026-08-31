@@ -54,9 +54,12 @@ async function initDB() {
       key        VARCHAR(255),
       event_type VARCHAR(255) NOT NULL,
       payload    JSONB        NOT NULL,
+      dedupe_key VARCHAR(600),
       created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE event_log ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(600)`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_event_log_dedupe_key ON event_log (dedupe_key) WHERE dedupe_key IS NOT NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kafka_consumer_offsets (
       consumer_group   VARCHAR(255) NOT NULL,
@@ -494,12 +497,21 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Simulated failure → DLQ
+    // Payload mirrors the PUT /:id/fail contract below (same event-type,
+    // same required fields) so consumers don't have to branch on which path
+    // produced a payment.failed event.
     if (body.simulateFailure) {
-      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT * FROM orders WHERE id = $1`, [body.orderId]);
-      const order = orderRows[0] ? rowToOrder(orderRows[0]) : { orderId: body.orderId };
-      send(res, 201, { id: randomUUID(), orderId: body.orderId, status: 'failed' });
+      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency FROM orders WHERE id = $1`, [body.orderId]);
+      const order    = orderRows[0];
+      const id       = randomUUID();
+      const amount   = body.amount ?? parseFloat(order?.amount ?? 100);
+      const currency = body.currency || order?.currency || 'USD';
+      const method   = body.method || 'credit_card';
+      const failedAt = new Date().toISOString();
+      send(res, 201, { id, orderId: body.orderId, status: 'failed' });
       publish('dead-letter-queue', body.orderId, {
-        originalEvent: order, failureReason: 'payment_failed', failedAt: new Date().toISOString(),
+        paymentId: id, orderId: body.orderId, status: 'failed',
+        amount, currency, method, failureReason: 'payment_failed', failedAt,
       }, { 'event-type': 'payment.failed', 'original-topic': 'orders' });
       return;
     }
