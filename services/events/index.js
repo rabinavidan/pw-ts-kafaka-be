@@ -16,7 +16,7 @@ const pool = new Pool({
 let dbReady = false;
 
 function serverLog(level, source, message, context = null) {
-  console.log(`[${level.toUpperCase()}] [${source}] ${message}`, context || '');
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, source, message, ...(context || {}) }));
   if (!dbReady) return;
   pool.query(
     `INSERT INTO server_logs (id, level, source, message, context) VALUES ($1, $2, $3, $4, $5)`,
@@ -83,22 +83,31 @@ const server = http.createServer(async (req, res) => {
 
   // GET /api/v1/events
   if (method === 'GET' && path === '/api/v1/events') {
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 200);
-    const topic = url.searchParams.get('topic');
+    const limit   = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 200);
+    const topic   = url.searchParams.get('topic');
+    const traceId = url.searchParams.get('traceId');
 
-    const query = topic
-      ? await dbQuery('event_log', 'SELECT',
-          `SELECT id, topic, key, event_type AS "eventType", payload, created_at AS "timestamp"
-             FROM event_log WHERE topic = $1 ORDER BY created_at DESC LIMIT $2`,
-          [topic, limit])
-      : await dbQuery('event_log', 'SELECT',
-          `SELECT id, topic, key, event_type AS "eventType", payload, created_at AS "timestamp"
-             FROM event_log ORDER BY created_at DESC LIMIT $1`,
-          [limit]);
+    let query;
+    if (traceId) {
+      query = await dbQuery('event_log', 'SELECT',
+        `SELECT id, topic, key, event_type AS "eventType", payload, trace_id AS "traceId", created_at AS "timestamp"
+           FROM event_log WHERE trace_id = $1 ORDER BY created_at ASC LIMIT $2`,
+        [traceId, limit]);
+    } else if (topic) {
+      query = await dbQuery('event_log', 'SELECT',
+        `SELECT id, topic, key, event_type AS "eventType", payload, trace_id AS "traceId", created_at AS "timestamp"
+           FROM event_log WHERE topic = $1 ORDER BY created_at DESC LIMIT $2`,
+        [topic, limit]);
+    } else {
+      query = await dbQuery('event_log', 'SELECT',
+        `SELECT id, topic, key, event_type AS "eventType", payload, trace_id AS "traceId", created_at AS "timestamp"
+           FROM event_log ORDER BY created_at DESC LIMIT $1`,
+        [limit]);
+    }
 
     const events = query.rows.map(r => ({
       id: r.id, topic: r.topic, key: r.key, eventType: r.eventType,
-      payload: r.payload, timestamp: r.timestamp.toISOString(),
+      payload: r.payload, traceId: r.traceId, timestamp: r.timestamp.toISOString(),
     }));
     return send(res, 200, { events });
   }

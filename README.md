@@ -2,7 +2,7 @@
 
 A full-spectrum Playwright + TypeScript automation framework for an event-driven
 microservices stack: REST APIs, Kafka message flows, PostgreSQL and a React UI —
-with 236 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
+with 239 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 
 [![CI/CD](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml/badge.svg)](https://github.com/rabinavidan/playwright-kafka-microservices/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/endpoint?url=https://rabinavidan.github.io/playwright-kafka-microservices/badges/tests.json)](https://rabinavidan.github.io/playwright-kafka-microservices/reports/)
@@ -15,7 +15,7 @@ with 236 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 
 ## At a glance
 
-- **236 tests across 7 layers** — API contract, DB-direct, Kafka producer/consumer,
+- **239 tests across 7 layers** — API contract, DB-direct, Kafka producer/consumer,
   integration pipeline, microservices, and UI E2E with a Page Object Model.
 - **Event-driven microservices** — gateway + orders, payments, events and
   notification services over Kafka, with a shared PostgreSQL `event_log`.
@@ -23,6 +23,9 @@ with 236 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
   for poison messages, per-event-type producer/consumer contracts, and negative
   sagas (failed payments, orphaned state) tested end to end against the real
   microservices stack.
+- **Traceable and observable** — a correlation id assigned at the gateway follows
+  one order across every service and Kafka topic it touches, queryable directly
+  (`GET /api/v1/events?traceId=`); every service logs structured JSON lines.
 - **Full CI/CD** — lint and type-check, UI build, parallel test jobs (backend,
   microservices, DB, E2E) and an auto-published test report.
 - **Runs anywhere** — single-command local mode (mock server), full microservices
@@ -36,10 +39,10 @@ with 236 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
 | DB             | 47      | Direct PostgreSQL: CRUD, constraints, defaults, upserts     |
 | Kafka          | 14      | Producer/consumer flows and topic behavior                 |
 | Integration    | 9       | Cross-service pipeline verification                        |
-| Microservices  | 59      | Per-service behavior, idempotency, DLQ, event contracts, negative sagas |
+| Microservices  | 62      | Per-service behavior, idempotency, DLQ, event contracts, negative sagas, tracing |
 | E2E (UI)       | 61      | Browser-level React dashboard flows (POM + data-testid)    |
 | UI (component) | 12      | Dashboard smoke checks — layout, filters, order/payment lifecycle |
-| **Total**      | **236** | across 24 spec files                                        |
+| **Total**      | **239** | across 25 spec files                                        |
 
 Run a single layer with its Playwright project, e.g. `npx playwright test --project=kafka`.
 
@@ -378,7 +381,8 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 │   │   ├── idempotency.spec.ts       # 3 tests: duplicate Kafka messages processed once
 │   │   ├── dead-letter-queue.spec.ts # 4 tests: poison messages, DLQ contract
 │   │   ├── event-contracts.spec.ts   # 6 tests: producer output vs. consumer expectation
-│   │   └── negative-sagas.spec.ts    # 3 tests: failed payments, orphaned state
+│   │   ├── negative-sagas.spec.ts    # 3 tests: failed payments, orphaned state
+│   │   └── tracing.spec.ts           # 3 tests: one order's trace id across every event
 │   └── e2e/
 │       ├── pages/                    # Page Object Model layer
 │       │   ├── HeaderPage.ts         # Nav tabs, health status
@@ -638,6 +642,10 @@ npm run clean
 **Idempotent consumption, not idempotent production.** The notification service dedupes on a `(topic, event-type, key)` identity computed at consume time (`event_log.dedupe_key`, a partial unique index) rather than relying on the message's own id — Kafka delivery is at-least-once, so a redelivered message is expected, not exceptional. A message that fails to parse as JSON is never silently dropped: it's routed to `dead-letter-queue` with the failure reason attached, and the consumer keeps running. Both are exercised end to end in `tests/microservices/idempotency.spec.ts` and `dead-letter-queue.spec.ts` against the real stack, not a mocked consumer.
 
 **One contract per event-type, enforced by a test, not a comment.** `src/utils/contract.ts` defines the required fields for every event-type this system publishes; `tests/microservices/event-contracts.spec.ts` checks real producer output against it. This is what caught a real bug during development: `payment.failed` was published with two different, incompatible payload shapes depending on which code path triggered it (`PUT /payments/:id/fail` vs. `simulateFailure` on create) — now fixed to share one shape.
+
+**One trace id per order, assigned at the edge.** The gateway assigns an `X-Trace-Id` if the caller didn't send one, then forwards it on every proxied request. `orders-service` stores it on the order row; `payments-service` reads it back off the order rather than minting its own, so a payment's events stay part of its order's saga rather than starting a new trace. Every Kafka event carries it in a `trace-id` header; the notification service reads that header and persists it to `event_log.trace_id`, which is what makes `GET /api/v1/events?traceId=` — and `tests/microservices/tracing.spec.ts` — able to reconstruct one order's whole lifecycle in creation order, across every topic it touched, with a single query.
+
+**Structured JSON logs, not formatted strings.** Every service (gateway included) logs one JSON object per line — `{timestamp, level, source, message, ...context}` — instead of a human-formatted prefix with a trailing object dump. Machine-parseable by `jq`/log aggregators without a custom parser, and every log line already carries whatever context (method, path, table, trace id) the call site attached.
 
 **Tag-based execution.** `@smoke` and `@regression` tags let the pipeline choose the right depth for each stage without maintaining separate config files.
 

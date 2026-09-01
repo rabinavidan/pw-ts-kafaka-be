@@ -19,7 +19,7 @@ const pool = new Pool({
 let dbReady = false;
 
 function serverLog(level, source, message, context = null) {
-  console.log(`[${level.toUpperCase()}] [${source}] ${message}`, context || '');
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, source, message, ...(context || {}) }));
   if (!dbReady) return;
   pool.query(
     `INSERT INTO server_logs (id, level, source, message, context) VALUES ($1, $2, $3, $4, $5)`,
@@ -70,12 +70,15 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS event_log (
       id VARCHAR(36) PRIMARY KEY, topic VARCHAR(255) NOT NULL, key VARCHAR(255),
       event_type VARCHAR(255) NOT NULL, payload JSONB NOT NULL, dedupe_key VARCHAR(600),
+      trace_id VARCHAR(36),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query(`ALTER TABLE event_log ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(600)`);
+  await pool.query(`ALTER TABLE event_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_topic   ON event_log (topic)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_created ON event_log (created_at DESC)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_event_log_dedupe_key ON event_log (dedupe_key) WHERE dedupe_key IS NOT NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_trace_id ON event_log (trace_id) WHERE trace_id IS NOT NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kafka_consumer_offsets (
       consumer_group VARCHAR(255) NOT NULL, topic VARCHAR(255) NOT NULL, partition INTEGER NOT NULL,
@@ -112,6 +115,7 @@ async function connectKafka() {
       eachMessage: async ({ topic, partition, message }) => {
         const key       = message.key?.toString() || null;
         const eventType = message.headers?.['event-type']?.toString() || 'unknown';
+        const traceId   = message.headers?.['trace-id']?.toString() || null;
         const rawValue  = message.value ? message.value.toString() : null;
 
         let payload;
@@ -133,7 +137,7 @@ async function connectKafka() {
             failureReason: 'invalid_json',
             error: parseError.message,
             failedAt: new Date().toISOString(),
-          }, { 'event-type': 'message.poisoned', 'original-topic': topic });
+          }, { 'event-type': 'message.poisoned', 'original-topic': topic, 'trace-id': traceId || '' });
         } else {
           serverLog('info', SVC, `Consumed ${eventType} from ${topic}`, { topic, partition, key, eventType });
 
@@ -144,10 +148,10 @@ async function connectKafka() {
           const dedupeKey = key ? `${topic}:${eventType}:${key}` : null;
 
           await dbQuery('event_log', 'INSERT',
-            `INSERT INTO event_log (id, topic, key, event_type, payload, dedupe_key)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO event_log (id, topic, key, event_type, payload, dedupe_key, trace_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
-            [randomUUID(), topic, key, eventType, payload, dedupeKey]
+            [randomUUID(), topic, key, eventType, payload, dedupeKey, traceId]
           ).catch(err => serverLog('warn', SVC, `event_log insert failed: ${err.message}`, { topic, eventType }));
         }
 

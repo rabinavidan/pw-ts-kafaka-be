@@ -5,9 +5,15 @@ CREATE TABLE IF NOT EXISTS orders (
   amount      NUMERIC(12,2) NOT NULL,
   currency    VARCHAR(10)   NOT NULL DEFAULT 'USD',
   items       JSONB         NOT NULL DEFAULT '[]',
+  -- Correlation id for this order's saga: assigned from an inbound
+  -- X-Trace-Id header, or generated fresh if the caller didn't send one.
+  -- Every Kafka event this order's lifecycle produces (and every payment
+  -- made against it) carries this same id.
+  trace_id    VARCHAR(36),
   created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36);
 
 CREATE TABLE IF NOT EXISTS payments (
   id          VARCHAR(36)   PRIMARY KEY,
@@ -16,9 +22,13 @@ CREATE TABLE IF NOT EXISTS payments (
   amount      NUMERIC(12,2) NOT NULL,
   currency    VARCHAR(10)   NOT NULL DEFAULT 'USD',
   method      VARCHAR(50)   NOT NULL DEFAULT 'credit_card',
+  -- Copied from the parent order's trace_id at creation time, so a
+  -- payment's own events stay part of its order's saga.
+  trace_id    VARCHAR(36),
   created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ
 );
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36);
 
 CREATE TABLE IF NOT EXISTS event_log (
   id          VARCHAR(36)   PRIMARY KEY,
@@ -30,9 +40,13 @@ CREATE TABLE IF NOT EXISTS event_log (
   -- redelivered/duplicate Kafka message. NULL for rows inserted without a
   -- message key (e.g. direct test/db-fixture inserts), which are never deduped.
   dedupe_key  VARCHAR(600),
+  -- Read from the Kafka message's trace-id header — lets one order be
+  -- followed end to end across every topic it touches.
+  trace_id    VARCHAR(36),
   created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 ALTER TABLE event_log ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(600);
+ALTER TABLE event_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36);
 
 CREATE TABLE IF NOT EXISTS kafka_consumer_offsets (
   consumer_group   VARCHAR(255) NOT NULL,
@@ -58,5 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_payments_order_id   ON payments (order_id);
 CREATE INDEX IF NOT EXISTS idx_event_log_topic     ON event_log (topic);
 CREATE INDEX IF NOT EXISTS idx_event_log_created   ON event_log (created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_event_log_dedupe_key ON event_log (dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_event_log_trace_id  ON event_log (trace_id) WHERE trace_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_orders_trace_id     ON orders (trace_id) WHERE trace_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_server_logs_created ON server_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_server_logs_level   ON server_logs (level);
