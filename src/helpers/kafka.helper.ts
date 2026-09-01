@@ -125,10 +125,13 @@ export class KafkaHelper {
       },
     });
 
-    // Add a 45s buffer on top of the caller's timeout to absorb consumer group join and
-    // partition assignment delays — these can take 20-30s when multiple projects run concurrently.
+    // Add a 75s buffer on top of the caller's timeout to absorb consumer group join and
+    // partition assignment delays. These are usually 20-30s when multiple projects run
+    // concurrently, but even fully serialized (one consumer group at a time) the CI broker's
+    // group-coordinator can occasionally take well past 45s on a single join — observed as a
+    // consistent, non-flaky 65s timeout in the microservices project even under workers: 1.
     // The wait exits as soon as messages arrive, so fast runs are unaffected.
-    await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs + 45000, 200);
+    await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs + 75000, 200);
     await consumer.disconnect();
 
     logger.info(`Consumed ${collected.length} messages from ${topic}`);

@@ -18,7 +18,7 @@ const pool = new Pool({
 let dbReady = false;
 
 function serverLog(level, source, message, context = null) {
-  console.log(`[${level.toUpperCase()}] [${source}] ${message}`, context || '');
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, source, message, ...(context || {}) }));
   if (!dbReady) return;
   pool.query(
     `INSERT INTO server_logs (id, level, source, message, context) VALUES ($1, $2, $3, $4, $5)`,
@@ -52,8 +52,10 @@ async function initDB() {
       id VARCHAR(36) PRIMARY KEY, order_id VARCHAR(36) NOT NULL,
       status VARCHAR(50) NOT NULL DEFAULT 'pending', amount NUMERIC(12,2) NOT NULL,
       currency VARCHAR(10) NOT NULL DEFAULT 'USD', method VARCHAR(50) NOT NULL DEFAULT 'credit_card',
+      trace_id VARCHAR(36),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ
     )`);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_payments_order_id ON payments (order_id)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS server_logs (
@@ -67,7 +69,7 @@ async function initDB() {
 function rowToPayment(r) {
   return {
     id: r.id, orderId: r.order_id, status: r.status, amount: parseFloat(r.amount),
-    currency: r.currency, method: r.method, createdAt: r.created_at.toISOString(),
+    currency: r.currency, method: r.method, traceId: r.trace_id, createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at ? r.updated_at.toISOString() : undefined,
   };
 }
@@ -137,18 +139,20 @@ const server = http.createServer(async (req, res) => {
     // same required fields) so consumers don't have to branch on which path
     // produced a payment.failed event.
     if (body.simulateFailure) {
-      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency FROM orders WHERE id = $1`, [body.orderId]);
+      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency, trace_id FROM orders WHERE id = $1`, [body.orderId]);
       const order    = orderRows[0];
       const id       = randomUUID();
       const amount   = body.amount ?? parseFloat(order?.amount ?? 100);
       const currency = body.currency || order?.currency || 'USD';
       const method   = body.method || 'credit_card';
+      const traceId  = order?.trace_id || randomUUID();
       const failedAt = new Date().toISOString();
-      send(res, 201, { id, orderId: body.orderId, status: 'failed' });
+      res.setHeader('X-Trace-Id', traceId);
+      send(res, 201, { id, orderId: body.orderId, status: 'failed', traceId });
       publish('dead-letter-queue', body.orderId,
         { paymentId: id, orderId: body.orderId, status: 'failed',
           amount, currency, method, failureReason: 'payment_failed', failedAt },
-        { 'event-type': 'payment.failed', 'original-topic': 'orders' });
+        { 'event-type': 'payment.failed', 'original-topic': 'orders', 'trace-id': traceId });
       return;
     }
 
@@ -156,24 +160,27 @@ const server = http.createServer(async (req, res) => {
     if (existing.length)
       return send(res, 409, { code: 'CONFLICT', message: 'Payment already exists for this order' });
 
-    const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency FROM orders WHERE id = $1`, [body.orderId]);
+    const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency, trace_id FROM orders WHERE id = $1`, [body.orderId]);
     const order  = orderRows[0];
     const id     = randomUUID();
     const amount = body.amount ?? parseFloat(order?.amount ?? 100);
     const currency = body.currency || order?.currency || 'USD';
     const method   = body.method || 'credit_card';
+    // A payment doesn't start its own trace — it's part of its order's saga.
+    const traceId  = order?.trace_id || randomUUID();
     const now      = new Date();
 
     await dbQuery('payments', 'INSERT',
-      `INSERT INTO payments (id, order_id, status, amount, currency, method, created_at) VALUES ($1, $2, 'pending', $3, $4, $5, $6)`,
-      [id, body.orderId, amount, currency, method, now]
+      `INSERT INTO payments (id, order_id, status, amount, currency, method, trace_id, created_at) VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7)`,
+      [id, body.orderId, amount, currency, method, traceId, now]
     );
-    const payment = { id, orderId: body.orderId, status: 'pending', amount, currency, method, createdAt: now.toISOString() };
+    const payment = { id, orderId: body.orderId, status: 'pending', amount, currency, method, traceId, createdAt: now.toISOString() };
+    res.setHeader('X-Trace-Id', traceId);
     send(res, 201, payment);
     publish('payments', payment.id,
       { paymentId: payment.id, orderId: payment.orderId, status: 'pending',
         amount: payment.amount, currency: payment.currency, method: payment.method, processedAt: payment.createdAt },
-      { 'event-type': 'payment.initiated' });
+      { 'event-type': 'payment.initiated', 'trace-id': traceId });
     return;
   }
 
@@ -184,11 +191,12 @@ const server = http.createServer(async (req, res) => {
       `UPDATE payments SET status = 'processed', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentProcess[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
+    res.setHeader('X-Trace-Id', payment.traceId || '');
     send(res, 200, payment);
     publish('payments', payment.id,
       { paymentId: payment.id, orderId: payment.orderId, status: 'processed',
         amount: payment.amount, currency: payment.currency, method: payment.method, processedAt: payment.updatedAt },
-      { 'event-type': 'payment.processed' });
+      { 'event-type': 'payment.processed', 'trace-id': payment.traceId || '' });
     return;
   }
 
@@ -199,11 +207,12 @@ const server = http.createServer(async (req, res) => {
       `UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentRefund[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
+    res.setHeader('X-Trace-Id', payment.traceId || '');
     send(res, 200, payment);
     publish('payments', payment.id,
       { paymentId: payment.id, orderId: payment.orderId, status: 'refunded',
         amount: payment.amount, currency: payment.currency, method: payment.method, processedAt: payment.updatedAt },
-      { 'event-type': 'payment.refunded' });
+      { 'event-type': 'payment.refunded', 'trace-id': payment.traceId || '' });
     return;
   }
 
@@ -214,12 +223,13 @@ const server = http.createServer(async (req, res) => {
       `UPDATE payments SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentFail[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
+    res.setHeader('X-Trace-Id', payment.traceId || '');
     send(res, 200, payment);
     publish('dead-letter-queue', payment.id,
       { paymentId: payment.id, orderId: payment.orderId, status: 'failed',
         amount: payment.amount, currency: payment.currency, method: payment.method,
         failureReason: 'payment_failed', failedAt: payment.updatedAt },
-      { 'event-type': 'payment.failed', 'original-topic': 'payments' });
+      { 'event-type': 'payment.failed', 'original-topic': 'payments', 'trace-id': payment.traceId || '' });
     return;
   }
 

@@ -39,6 +39,9 @@ export interface Order {
   status: string;
   amount: number;
   currency: string;
+  /** Correlation id for this order's saga — shared by every Kafka event
+   *  it and its payments produce. */
+  traceId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -56,6 +59,7 @@ export interface Payment {
   amount: number;
   currency: string;
   method: string;
+  traceId?: string;
   createdAt: string;
 }
 

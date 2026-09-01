@@ -31,10 +31,12 @@ async function initDB() {
       amount     NUMERIC(12,2) NOT NULL,
       currency   VARCHAR(10)   NOT NULL DEFAULT 'USD',
       items      JSONB         NOT NULL DEFAULT '[]',
+      trace_id   VARCHAR(36),
       created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ   NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS payments (
       id         VARCHAR(36)   PRIMARY KEY,
@@ -43,10 +45,12 @@ async function initDB() {
       amount     NUMERIC(12,2) NOT NULL,
       currency   VARCHAR(10)   NOT NULL DEFAULT 'USD',
       method     VARCHAR(50)   NOT NULL DEFAULT 'credit_card',
+      trace_id   VARCHAR(36),
       created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     )
   `);
+  await pool.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36)`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS event_log (
       id         VARCHAR(36)  PRIMARY KEY,
@@ -55,11 +59,14 @@ async function initDB() {
       event_type VARCHAR(255) NOT NULL,
       payload    JSONB        NOT NULL,
       dedupe_key VARCHAR(600),
+      trace_id   VARCHAR(36),
       created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
     )
   `);
   await pool.query(`ALTER TABLE event_log ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(600)`);
+  await pool.query(`ALTER TABLE event_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36)`);
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_event_log_dedupe_key ON event_log (dedupe_key) WHERE dedupe_key IS NOT NULL`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_event_log_trace_id ON event_log (trace_id) WHERE trace_id IS NOT NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS kafka_consumer_offsets (
       consumer_group   VARCHAR(255) NOT NULL,
@@ -90,8 +97,11 @@ async function initDB() {
 }
 
 // ── Server logger ─────────────────────────────────────────────────
+// One JSON object per line on stdout — grep/jq-friendly and what a real
+// log aggregator (Datadog, CloudWatch, etc.) expects, rather than a
+// human-formatted string with a trailing object dump.
 function serverLog(level, source, message, context = null) {
-  console.log(`[${level.toUpperCase()}] [${source}] ${message}`, context || '');
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, source, message, ...(context || {}) }));
   if (!dbReady) return;
   pool.query(
     `INSERT INTO server_logs (id, level, source, message, context) VALUES ($1, $2, $3, $4, $5)`,
@@ -125,6 +135,7 @@ function rowToOrder(r) {
     amount:    parseFloat(r.amount),
     currency:  r.currency,
     items:     r.items,
+    traceId:   r.trace_id,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
   };
@@ -138,6 +149,7 @@ function rowToPayment(r) {
     amount:    parseFloat(r.amount),
     currency:  r.currency,
     method:    r.method,
+    traceId:   r.trace_id,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at ? r.updated_at.toISOString() : undefined,
   };
@@ -163,9 +175,10 @@ async function connectKafka() {
 
 async function publish(topic, key, value, headers = {}) {
   const eventType = (headers['event-type'] || 'unknown').toString();
+  const traceId   = headers['trace-id'] ? headers['trace-id'].toString() : null;
   pool.query(
-    `INSERT INTO event_log (id, topic, key, event_type, payload) VALUES ($1, $2, $3, $4, $5)`,
-    [randomUUID(), topic, key, eventType, value]
+    `INSERT INTO event_log (id, topic, key, event_type, payload, trace_id) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [randomUUID(), topic, key, eventType, value, traceId]
   ).catch(err => console.warn('[mock-server] event_log insert failed:', err.message));
 
   if (!producerReady) {
@@ -316,18 +329,26 @@ const server = http.createServer(async (req, res) => {
 
   // GET /api/v1/events
   if (method === 'GET' && path === '/api/v1/events') {
-    const limit = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 200);
-    const { rows } = await pool.query(
-      `SELECT id, topic, key, event_type AS "eventType", payload, created_at AS "timestamp"
-         FROM event_log ORDER BY created_at DESC LIMIT $1`,
-      [limit]
-    );
+    const limit   = Math.min(parseInt(url.searchParams.get('limit') || '30', 10), 200);
+    const traceId = url.searchParams.get('traceId');
+    const { rows } = traceId
+      ? await pool.query(
+          `SELECT id, topic, key, event_type AS "eventType", payload, trace_id AS "traceId", created_at AS "timestamp"
+             FROM event_log WHERE trace_id = $1 ORDER BY created_at ASC LIMIT $2`,
+          [traceId, limit]
+        )
+      : await pool.query(
+          `SELECT id, topic, key, event_type AS "eventType", payload, trace_id AS "traceId", created_at AS "timestamp"
+             FROM event_log ORDER BY created_at DESC LIMIT $1`,
+          [limit]
+        );
     const events = rows.map(r => ({
       id:        r.id,
       topic:     r.topic,
       key:       r.key,
       eventType: r.eventType,
       payload:   r.payload,
+      traceId:   r.traceId,
       timestamp: r.timestamp.toISOString(),
     }));
     return send(res, 200, { events });
@@ -378,22 +399,27 @@ const server = http.createServer(async (req, res) => {
     const amount = items.length > 0 ? items.length * 100 : 100;
     const id     = randomUUID();
     const now    = new Date();
+    // Honor a caller-supplied trace id (a real client already tracing the
+    // request), otherwise this order starts a new one — every event this
+    // order's saga produces, including its payments, carries it from here.
+    const traceId = (req.headers['x-trace-id'] || '').toString() || randomUUID();
 
-    await dbQuery('orders', 'INSERT', `INSERT INTO orders (id, user_id, status, amount, currency, items, created_at, updated_at) VALUES ($1, $2, 'created', $3, $4, $5, $6, $6)`,
-      [id, body.userId, amount, body.currency || 'USD', JSON.stringify(items), now]);
+    await dbQuery('orders', 'INSERT', `INSERT INTO orders (id, user_id, status, amount, currency, items, trace_id, created_at, updated_at) VALUES ($1, $2, 'created', $3, $4, $5, $6, $7, $7)`,
+      [id, body.userId, amount, body.currency || 'USD', JSON.stringify(items), traceId, now]);
 
     const order = {
       id, userId: body.userId, status: 'created', amount,
-      currency: body.currency || 'USD', items,
+      currency: body.currency || 'USD', items, traceId,
       createdAt: now.toISOString(), updatedAt: now.toISOString(),
     };
+    res.setHeader('X-Trace-Id', traceId);
     send(res, 201, order);
 
     publish('orders', order.id, {
       orderId: order.id, userId: order.userId, status: 'created',
       amount: order.amount, currency: order.currency, items: order.items,
       createdAt: order.createdAt,
-    }, { 'event-type': 'order.created' });
+    }, { 'event-type': 'order.created', 'trace-id': traceId });
 
     return;
   }
@@ -429,12 +455,13 @@ const server = http.createServer(async (req, res) => {
     const { rows } = await dbQuery('orders', 'UPDATE', `UPDATE orders SET status = 'confirmed', updated_at = NOW() WHERE id = $1 RETURNING *`, [orderConfirm[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     const order = rowToOrder(rows[0]);
+    res.setHeader('X-Trace-Id', order.traceId || '');
     send(res, 200, order);
     publish('orders', order.id, {
       orderId: order.id, userId: order.userId, status: 'confirmed',
       amount: order.amount, currency: order.currency, items: order.items,
       createdAt: order.createdAt,
-    }, { 'event-type': 'order.confirmed' });
+    }, { 'event-type': 'order.confirmed', 'trace-id': order.traceId || '' });
     return;
   }
 
@@ -444,12 +471,13 @@ const server = http.createServer(async (req, res) => {
     const { rows } = await dbQuery('orders', 'UPDATE', `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1 RETURNING *`, [orderCancel[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     const order = rowToOrder(rows[0]);
+    res.setHeader('X-Trace-Id', order.traceId || '');
     send(res, 200, order);
     publish('orders', order.id, {
       orderId: order.id, userId: order.userId, status: 'cancelled',
       amount: order.amount, currency: order.currency, items: order.items,
       createdAt: order.createdAt,
-    }, { 'event-type': 'order.cancelled' });
+    }, { 'event-type': 'order.cancelled', 'trace-id': order.traceId || '' });
     return;
   }
 
@@ -501,18 +529,20 @@ const server = http.createServer(async (req, res) => {
     // same required fields) so consumers don't have to branch on which path
     // produced a payment.failed event.
     if (body.simulateFailure) {
-      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency FROM orders WHERE id = $1`, [body.orderId]);
+      const { rows: orderRows } = await dbQuery('orders', 'SELECT', `SELECT amount, currency, trace_id FROM orders WHERE id = $1`, [body.orderId]);
       const order    = orderRows[0];
       const id       = randomUUID();
       const amount   = body.amount ?? parseFloat(order?.amount ?? 100);
       const currency = body.currency || order?.currency || 'USD';
       const method   = body.method || 'credit_card';
+      const traceId  = order?.trace_id || randomUUID();
       const failedAt = new Date().toISOString();
-      send(res, 201, { id, orderId: body.orderId, status: 'failed' });
+      res.setHeader('X-Trace-Id', traceId);
+      send(res, 201, { id, orderId: body.orderId, status: 'failed', traceId });
       publish('dead-letter-queue', body.orderId, {
         paymentId: id, orderId: body.orderId, status: 'failed',
         amount, currency, method, failureReason: 'payment_failed', failedAt,
-      }, { 'event-type': 'payment.failed', 'original-topic': 'orders' });
+      }, { 'event-type': 'payment.failed', 'original-topic': 'orders', 'trace-id': traceId });
       return;
     }
 
@@ -528,18 +558,21 @@ const server = http.createServer(async (req, res) => {
     const amount  = body.amount ?? order?.amount ?? 100;
     const currency = body.currency || order?.currency || 'USD';
     const method  = body.method || 'credit_card';
+    // A payment doesn't start its own trace — it's part of its order's saga.
+    const traceId = order?.traceId || randomUUID();
     const now     = new Date();
 
-    await dbQuery('payments', 'INSERT', `INSERT INTO payments (id, order_id, status, amount, currency, method, created_at) VALUES ($1, $2, 'pending', $3, $4, $5, $6)`,
-      [id, body.orderId, amount, currency, method, now]);
+    await dbQuery('payments', 'INSERT', `INSERT INTO payments (id, order_id, status, amount, currency, method, trace_id, created_at) VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7)`,
+      [id, body.orderId, amount, currency, method, traceId, now]);
 
-    const payment = { id, orderId: body.orderId, status: 'pending', amount, currency, method, createdAt: now.toISOString() };
+    const payment = { id, orderId: body.orderId, status: 'pending', amount, currency, method, traceId, createdAt: now.toISOString() };
+    res.setHeader('X-Trace-Id', traceId);
     send(res, 201, payment);
     publish('payments', payment.id, {
       paymentId: payment.id, orderId: payment.orderId, status: 'pending',
       amount: payment.amount, currency: payment.currency, method: payment.method,
       processedAt: payment.createdAt,
-    }, { 'event-type': 'payment.initiated' });
+    }, { 'event-type': 'payment.initiated', 'trace-id': traceId });
     return;
   }
 
@@ -549,12 +582,13 @@ const server = http.createServer(async (req, res) => {
     const { rows } = await dbQuery('payments', 'UPDATE', `UPDATE payments SET status = 'processed', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentProcess[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
+    res.setHeader('X-Trace-Id', payment.traceId || '');
     send(res, 200, payment);
     publish('payments', payment.id, {
       paymentId: payment.id, orderId: payment.orderId, status: 'processed',
       amount: payment.amount, currency: payment.currency, method: payment.method,
       processedAt: payment.updatedAt,
-    }, { 'event-type': 'payment.processed' });
+    }, { 'event-type': 'payment.processed', 'trace-id': payment.traceId || '' });
     return;
   }
 
@@ -564,12 +598,13 @@ const server = http.createServer(async (req, res) => {
     const { rows } = await dbQuery('payments', 'UPDATE', `UPDATE payments SET status = 'refunded', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentRefund[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
+    res.setHeader('X-Trace-Id', payment.traceId || '');
     send(res, 200, payment);
     publish('payments', payment.id, {
       paymentId: payment.id, orderId: payment.orderId, status: 'refunded',
       amount: payment.amount, currency: payment.currency, method: payment.method,
       processedAt: payment.updatedAt,
-    }, { 'event-type': 'payment.refunded' });
+    }, { 'event-type': 'payment.refunded', 'trace-id': payment.traceId || '' });
     return;
   }
 
@@ -579,12 +614,13 @@ const server = http.createServer(async (req, res) => {
     const { rows } = await dbQuery('payments', 'UPDATE', `UPDATE payments SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`, [paymentFail[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Payment not found' });
     const payment = rowToPayment(rows[0]);
+    res.setHeader('X-Trace-Id', payment.traceId || '');
     send(res, 200, payment);
     publish('dead-letter-queue', payment.id, {
       paymentId: payment.id, orderId: payment.orderId, status: 'failed',
       amount: payment.amount, currency: payment.currency, method: payment.method,
       failureReason: 'payment_failed', failedAt: payment.updatedAt,
-    }, { 'event-type': 'payment.failed', 'original-topic': 'payments' });
+    }, { 'event-type': 'payment.failed', 'original-topic': 'payments', 'trace-id': payment.traceId || '' });
     return;
   }
 

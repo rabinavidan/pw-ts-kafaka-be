@@ -18,7 +18,7 @@ const pool = new Pool({
 let dbReady = false;
 
 function serverLog(level, source, message, context = null) {
-  console.log(`[${level.toUpperCase()}] [${source}] ${message}`, context || '');
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, source, message, ...(context || {}) }));
   if (!dbReady) return;
   pool.query(
     `INSERT INTO server_logs (id, level, source, message, context) VALUES ($1, $2, $3, $4, $5)`,
@@ -52,10 +52,13 @@ async function initDB() {
       id VARCHAR(36) PRIMARY KEY, user_id VARCHAR(255) NOT NULL,
       status VARCHAR(50) NOT NULL DEFAULT 'created', amount NUMERIC(12,2) NOT NULL,
       currency VARCHAR(10) NOT NULL DEFAULT 'USD', items JSONB NOT NULL DEFAULT '[]',
+      trace_id VARCHAR(36),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS trace_id VARCHAR(36)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status  ON orders (status)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders (user_id)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_trace_id ON orders (trace_id) WHERE trace_id IS NOT NULL`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS server_logs (
       id VARCHAR(36) PRIMARY KEY, level VARCHAR(10) NOT NULL,
@@ -68,7 +71,7 @@ async function initDB() {
 function rowToOrder(r) {
   return {
     id: r.id, userId: r.user_id, status: r.status, amount: parseFloat(r.amount),
-    currency: r.currency, items: r.items,
+    currency: r.currency, items: r.items, traceId: r.trace_id,
     createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
   };
 }
@@ -140,18 +143,23 @@ const server = http.createServer(async (req, res) => {
     const amount = items.length > 0 ? items.length * 100 : 100;
     const id     = randomUUID();
     const now    = new Date();
+    // Honor a caller-supplied trace id, otherwise this order starts a new
+    // one — every event this order's saga produces, including its
+    // payments, carries it from here.
+    const traceId = (req.headers['x-trace-id'] || '').toString() || randomUUID();
 
     await dbQuery('orders', 'INSERT',
-      `INSERT INTO orders (id, user_id, status, amount, currency, items, created_at, updated_at)
-       VALUES ($1, $2, 'created', $3, $4, $5, $6, $6)`,
-      [id, body.userId, amount, body.currency || 'USD', JSON.stringify(items), now]
+      `INSERT INTO orders (id, user_id, status, amount, currency, items, trace_id, created_at, updated_at)
+       VALUES ($1, $2, 'created', $3, $4, $5, $6, $7, $7)`,
+      [id, body.userId, amount, body.currency || 'USD', JSON.stringify(items), traceId, now]
     );
     const order = { id, userId: body.userId, status: 'created', amount, currency: body.currency || 'USD',
-                    items, createdAt: now.toISOString(), updatedAt: now.toISOString() };
+                    items, traceId, createdAt: now.toISOString(), updatedAt: now.toISOString() };
+    res.setHeader('X-Trace-Id', traceId);
     send(res, 201, order);
     publish('orders', order.id, { orderId: order.id, userId: order.userId, status: 'created',
       amount: order.amount, currency: order.currency, items: order.items, createdAt: order.createdAt },
-      { 'event-type': 'order.created' });
+      { 'event-type': 'order.created', 'trace-id': traceId });
     return;
   }
 
@@ -181,10 +189,11 @@ const server = http.createServer(async (req, res) => {
       `UPDATE orders SET status = 'confirmed', updated_at = NOW() WHERE id = $1 RETURNING *`, [orderConfirm[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     const order = rowToOrder(rows[0]);
+    res.setHeader('X-Trace-Id', order.traceId || '');
     send(res, 200, order);
     publish('orders', order.id, { orderId: order.id, userId: order.userId, status: 'confirmed',
       amount: order.amount, currency: order.currency, items: order.items, createdAt: order.createdAt },
-      { 'event-type': 'order.confirmed' });
+      { 'event-type': 'order.confirmed', 'trace-id': order.traceId || '' });
     return;
   }
 
@@ -195,10 +204,11 @@ const server = http.createServer(async (req, res) => {
       `UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1 RETURNING *`, [orderCancel[1]]);
     if (!rows.length) return send(res, 404, { code: 'NOT_FOUND', message: 'Order not found' });
     const order = rowToOrder(rows[0]);
+    res.setHeader('X-Trace-Id', order.traceId || '');
     send(res, 200, order);
     publish('orders', order.id, { orderId: order.id, userId: order.userId, status: 'cancelled',
       amount: order.amount, currency: order.currency, items: order.items, createdAt: order.createdAt },
-      { 'event-type': 'order.cancelled' });
+      { 'event-type': 'order.cancelled', 'trace-id': order.traceId || '' });
     return;
   }
 

@@ -1,8 +1,14 @@
 require('dotenv').config();
 const http = require('http');
+const { randomUUID } = require('crypto');
 
 const PORT      = process.env.PORT || 3000;
 const startTime = Date.now() - 1000;
+const SVC       = 'gateway';
+
+function log(level, message, context = null) {
+  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level, source: SVC, message, ...(context || {}) }));
+}
 
 const SERVICES = {
   orders:        process.env.ORDERS_SERVICE_URL        || 'http://localhost:3001',
@@ -19,17 +25,21 @@ function routeTo(path) {
 }
 
 function forward(req, res, baseUrl) {
+  // Assign a trace id at the edge if the caller didn't bring one — every
+  // downstream service reads this same header off the forwarded request.
+  const traceId = (req.headers['x-trace-id'] || '').toString() || randomUUID();
   const target = new URL(req.url, baseUrl);
   const options = {
     hostname: target.hostname, port: target.port || 80,
     path: target.pathname + target.search, method: req.method,
-    headers: { ...req.headers, host: target.host },
+    headers: { ...req.headers, host: target.host, 'x-trace-id': traceId },
   };
   const proxyReq = http.request(options, (proxyRes) => {
     res.writeHead(proxyRes.statusCode, proxyRes.headers);
     proxyRes.pipe(res, { end: true });
   });
   proxyReq.on('error', (err) => {
+    log('error', `Bad gateway forwarding to ${baseUrl}: ${err.message}`, { service: baseUrl, traceId });
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ code: 'BAD_GATEWAY', service: baseUrl, message: err.message }));
   });
@@ -51,6 +61,16 @@ const server = http.createServer(async (req, res) => {
   const url    = new URL(req.url, `http://localhost:${PORT}`);
   const path   = url.pathname;
   const method = req.method.toUpperCase();
+  const t0     = Date.now();
+
+  if (path !== '/health' && path !== '/ready') {
+    const origEnd = res.end.bind(res);
+    res.end = function (...args) {
+      log('info', `${method} ${path} → ${res.statusCode}`, { method, path, status: res.statusCode, ms: Date.now() - t0 });
+      res.end = origEnd;
+      return origEnd(...args);
+    };
+  }
 
   if (method === 'GET' && path === '/health') {
     const checks = await Promise.all(
@@ -81,5 +101,5 @@ const server = http.createServer(async (req, res) => {
   forward(req, res, target);
 });
 
-server.listen(PORT, () => console.log(`[gateway] Listening on http://localhost:${PORT}`));
+server.listen(PORT, () => log('info', `Listening on http://localhost:${PORT}`));
 process.on('SIGTERM', () => server.close());
