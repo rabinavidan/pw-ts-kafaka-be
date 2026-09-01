@@ -241,6 +241,22 @@ kubectl delete namespace pw-kafka-test
 
 ---
 
+### Makefile shortcuts
+
+Every command above (and the `npm run` test scripts) is also available as a `make` target — run `make help` to list them:
+
+```bash
+make install          # npm ci + UI deps
+make dev-services     # gateway + all 4 services (microservices mode)
+make test-microservices
+make docker-build && make kind-load && make k8s-deploy   # build, load, deploy to kind
+make k8s-lint          # validate k8s/*.yaml locally (same check CI runs)
+make k8s-status        # watch pod rollout
+make k8s-teardown      # delete the pw-kafka-test namespace
+```
+
+---
+
 ## Running Tests
 
 ### DB layer tests (require PostgreSQL only)
@@ -395,7 +411,7 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 │       └── payments.e2e.spec.ts      # 27 tests: create, process/refund/fail, filters, bulk, Kafka events
 │
 └── .github/workflows/
-    └── ci.yml                        # 8-job pipeline (see CI/CD section)
+    └── ci.yml                        # 9-job pipeline (see CI/CD section)
 ```
 
 ---
@@ -524,6 +540,7 @@ lint ──┬── test-be ────────────┐
        │                       │
 ui-build ── test-e2e ──────────┤
                                 │
+manifest-lint (independent)    │
                             coverage
                                 │
                              deploy   ← main branch only
@@ -534,9 +551,10 @@ ui-build ── test-e2e ──────────┤
 | Job | Triggers | Description |
 |-----|----------|-------------|
 | `lint` | push / PR | ESLint + `tsc --noEmit` |
+| `manifest-lint` | push / PR, independent | Validates every `k8s/*.yaml` against upstream Kubernetes schemas with `kubeconform`, plus `docker compose config` on `docker-compose.yml` |
 | `ui-build` | push / PR | `vite build` — uploads `ui-dist` artifact |
 | `test-be` | after `lint` | Spins up Kafka services, runs `api` + `kafka` + `integration` projects (57 tests), generates HTML report + job summary |
-| `test-microservices` | after `lint` | Spins up Postgres + Kafka, starts the full gateway + orders/payments/events/notifications stack (`npm run dev:services`), runs the `microservices` project (59 tests — per-service behavior, idempotency, DLQ, event contracts, negative sagas), generates job summary |
+| `test-microservices` | after `lint` | Spins up Postgres + Kafka, starts the full gateway + orders/payments/events/notifications stack (`npm run dev:services`), runs the `microservices` project (62 tests — per-service behavior, idempotency, DLQ, event contracts, negative sagas, distributed tracing), generates job summary |
 | `test-db` | after `lint` | Spins up PostgreSQL 16, applies schema, runs `npm run test:db` (47 tests), generates job summary |
 | `test-e2e` | after `lint` + `ui-build` | Runs `npm run test:e2e` (`e2e-orders` + `e2e-payments`, 61 tests) then `npm run test:ui-smoke` (12 tests) against mock server + Vite via `webServer`, generates job summary |
 | `coverage` | after all four test jobs, always runs | Aggregates pass/fail across every layer into a shields.io badge + per-layer breakdown, fails the job if the pass rate drops below the configured threshold |
