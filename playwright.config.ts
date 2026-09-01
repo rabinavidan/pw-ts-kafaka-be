@@ -48,9 +48,9 @@ export default defineConfig({
       name: 'microservices',
       testDir: './tests/microservices',
       // Targets each service directly on its own port — requires `npm run dev:services` to be running
-      // 140s to comfortably exceed KafkaHelper.consume()'s worst-case internal budget
-      // (20s caller timeout + 75s rebalance buffer = 95s) with margin to spare.
-      timeout: 140_000,
+      // 190s to comfortably exceed KafkaHelper.consume()'s worst-case internal budget
+      // (20s caller timeout + 120s rebalance buffer = 140s) with margin to spare.
+      timeout: 190_000,
       retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
       workers: 1,   // serialise — idempotency/DLQ/contract/tracing tests each spin up their
                      // own throwaway Kafka consumer group; running them in parallel triggers
@@ -59,14 +59,16 @@ export default defineConfig({
     {
       name: 'kafka',
       testDir: './tests/kafka',
-      timeout: 90_000,
+      // 190s: worst-case caller timeoutMs here is 30s, + KafkaHelper.consume()'s 120s buffer = 150s.
+      timeout: 190_000,
       retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
       workers: 1,   // serialise Kafka tests to avoid rebalance timeouts with concurrent consumer groups
     },
     {
       name: 'integration',
       testDir: './tests/integration',
-      timeout: 120_000,
+      // 190s: worst-case caller timeoutMs here is 30s, + KafkaHelper.consume()'s 120s buffer = 150s.
+      timeout: 190_000,
       retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
       workers: 1,   // serialise to prevent partition rebalancing under concurrent load
     },
