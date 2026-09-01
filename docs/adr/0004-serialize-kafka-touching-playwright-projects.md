@@ -1,7 +1,7 @@
 # ADR-0004: Serialize Kafka-touching Playwright projects (`workers: 1`)
 
 **Status:** Accepted
-**Date:** 2026-08-30 (kafka/integration), extended 2026-09-01 (microservices), buffer revised 2026-09-01
+**Date:** 2026-08-30 (kafka/integration), extended 2026-09-01 (microservices), buffer raised then reverted 2026-09-01
 
 ## Context
 
@@ -33,11 +33,11 @@ ever collected.
 Every Playwright project whose tests call `KafkaHelper.consume()` runs with
 `workers: 1` (`kafka`, `integration`, and — since M3 — `microservices`), forcing
 its tests to run one at a time so at most one ephemeral consumer group is joining
-at once. Each such project also carries a generous `timeout` (currently 190s) to
+at once. Each such project also carries a generous `timeout` (currently 140s) to
 absorb the rebalance cost, and `KafkaHelper.consume()` itself budgets
-`timeoutMs + 120s` internally — raised twice already (45s → 75s → 120s) as each
-prior buffer proved insufficient in practice; see Consequences for why this is
-framed as an ongoing mitigation rather than a closed issue.
+`timeoutMs + 75s` internally. That value went 45s → 75s → 120s → back to 75s in
+one day, and the trip to 120s and back is itself the most useful data point this
+ADR has — see Consequences.
 
 ## Consequences
 
@@ -66,17 +66,40 @@ framed as an ongoing mitigation rather than a closed issue.
   throws on timeout, so a timed-out consume() never disconnected its consumer —
   it leaked (heartbeat timers included) until the Playwright `kafka` fixture's own
   teardown ran, instead of the moment the timeout fired. Now wrapped in
-  `try/finally`. This is a legitimate correctness fix regardless of whether it
-  turns out to be a contributing factor here.
-- The buffer is now 120s (raised from 75s for the same reason 75s was raised from
-  45s). This is documented as a **pragmatic mitigation, not a resolution** — the
-  buffer is a ceiling the wait exits from as soon as messages arrive, so widening
-  it costs nothing for the common (fast) case, but if `order.confirmed`'s failure
-  is a genuine delivery bug rather than slowness, no buffer size fixes it. If this
-  recurs again, the next step is to instrument `notification-service`'s own
-  consumption of the same message (does it receive `order.confirmed` promptly?)
-  to determine whether this is specific to the test's ephemeral consumer group or
-  a broader issue with that one message.
+  `try/finally`. This is a legitimate correctness fix, kept independent of the
+  buffer-size question below.
+- **Widening the buffer to 120s made things measurably worse, not better —
+  and this is the clearest evidence yet that "wait longer" is the wrong lever.**
+  The very next real CI run with the 120s buffer didn't fail one test at the
+  ceiling like every prior run; it failed **four consecutive tests**
+  (`order.created`, `order.confirmed`, `order.cancelled`, and the next) with
+  **zero recoveries across 3 retries each**, and the job's runtime ballooned
+  from the usual 5-6 minutes to **28 minutes**. Reading that run's job logs:
+  HTTP calls stayed fast throughout (6ms for `POST /orders`) and the Kafka
+  broker's own logs show no errors, crashes, or GC pauses in that window — only
+  new consumer-group *joins* hung, and unlike every previous run, none of the
+  retries ever recovered. The buffer was reverted to 75s the same day; the very
+  next CI run confirmed the revert restored the narrower, non-cascading failure
+  pattern (`Microservices Tests` passed cleanly in ~5.6 minutes).
+  **Working theory, still unconfirmed:** a longer buffer gives a stuck consumer
+  more wall-clock time to sit before a *fresh* retry — with a brand-new
+  consumer group — gets a chance to land outside whatever transient bad window
+  caused the stall. A shorter buffer fails faster and gets more attempts into
+  the same wall-clock budget, which may matter more than any single attempt's
+  patience if the underlying cause is a transient, self-clearing stall rather
+  than a permanent one. This reframes the buffer from "make it wide enough and
+  the problem goes away" to "keep it at the smallest value that's held up
+  empirically" — 75s is that value today, not because it's provably correct,
+  but because it's the one with a track record of *not* cascading.
+- The `order.confirmed`-specific pattern described above (zero messages
+  collected, sibling tests reliably fast) and this broader cascading-failure
+  mode may be the same underlying issue at different severities, or two
+  different issues — genuinely unclear without live broker access during a
+  failure. If this recurs again, the next step is to instrument
+  `notification-service`'s own consumption of the same message (does it
+  receive `order.confirmed` promptly, independent of the test's own ephemeral
+  consumer?) to determine whether this is specific to ephemeral test consumer
+  groups or a broader issue with message delivery for that one message.
 - The `microservices` project's test suite now runs measurably slower in CI (~5-6
   minutes instead of ~2-3) because 62 tests execute one at a time instead of
   across parallel workers. This is treated as acceptable: correctness over speed
