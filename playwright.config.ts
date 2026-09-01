@@ -48,6 +48,11 @@ export default defineConfig({
       name: 'microservices',
       testDir: './tests/microservices',
       // Targets each service directly on its own port — requires `npm run dev:services` to be running
+      timeout: 90_000,
+      retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
+      workers: 1,   // serialise — idempotency/DLQ/contract/tracing tests each spin up their
+                     // own throwaway Kafka consumer group; running them in parallel triggers
+                     // the same rebalance timeouts the kafka/integration projects avoid this way
     },
     {
       name: 'kafka',
