@@ -1,7 +1,7 @@
 # ADR-0004: Serialize Kafka-touching Playwright projects (`workers: 1`)
 
 **Status:** Accepted
-**Date:** 2026-08-30 (kafka/integration), extended 2026-09-01 (microservices)
+**Date:** 2026-08-30 (kafka/integration), extended 2026-09-01 (microservices), buffer revised 2026-09-01
 
 ## Context
 
@@ -33,10 +33,11 @@ ever collected.
 Every Playwright project whose tests call `KafkaHelper.consume()` runs with
 `workers: 1` (`kafka`, `integration`, and — since M3 — `microservices`), forcing
 its tests to run one at a time so at most one ephemeral consumer group is joining
-at once. Each such project also carries a generous `timeout` (90s–140s) to absorb
-the rebalance cost, and `KafkaHelper.consume()` itself budgets `timeoutMs + 75s`
-internally (raised from an initial 45s buffer after serializing still weren't
-enough headroom for one project — see Consequences).
+at once. Each such project also carries a generous `timeout` (currently 190s) to
+absorb the rebalance cost, and `KafkaHelper.consume()` itself budgets
+`timeoutMs + 120s` internally — raised twice already (45s → 75s → 120s) as each
+prior buffer proved insufficient in practice; see Consequences for why this is
+framed as an ongoing mitigation rather than a closed issue.
 
 ## Consequences
 
@@ -45,10 +46,37 @@ enough headroom for one project — see Consequences).
   ever joining at a time, the CI broker's group-coordinator was observed to
   occasionally take longer than the original 45s buffer on a single, uncontended
   join — a different test drew the "slow join" outcome on different runs
-  (`order.cancelled` before serializing, `order.confirmed` after). The fix that
-  actually closed this out was raising the buffer itself to 75s, not further
-  serialization — the buffer is a ceiling the wait exits from as soon as messages
-  arrive, so widening it costs nothing for the common (fast) case.
+  (`order.cancelled` before serializing, `order.confirmed` after).
+- **The buffer alone has not proven sufficient, twice.** Raising it to 75s held
+  for exactly two CI runs (the PR that introduced it, plus the next milestone's
+  PR) before recurring: a *docs-only* PR with zero code changes near Kafka
+  reproduced the identical `order.confirmed matches its contract` failure twice
+  in a row, including on a re-run. What makes this specific test notable isn't
+  just that it's slow sometimes — it's that across every CI run observed so far,
+  `order.confirmed` is the one that times out with **zero messages ever
+  collected**, while its structurally-identical sibling `order.cancelled` (same
+  publish shape, same two-messages-per-key pattern, running immediately after it
+  in the same file) consistently succeeds in under a second. That's a much
+  higher, more consistent failure rate for one specific test than "generic
+  broker slowness spread evenly across ~20 Kafka-consuming calls" would predict,
+  and comparing the two tests' producer code byte-for-byte turned up no
+  discriminating difference. The root cause remains **unconfirmed**.
+- While investigating this, a real bug was found and fixed: `KafkaHelper.consume()`
+  called `consumer.disconnect()` immediately after the `waitUntil()` call that
+  throws on timeout, so a timed-out consume() never disconnected its consumer —
+  it leaked (heartbeat timers included) until the Playwright `kafka` fixture's own
+  teardown ran, instead of the moment the timeout fired. Now wrapped in
+  `try/finally`. This is a legitimate correctness fix regardless of whether it
+  turns out to be a contributing factor here.
+- The buffer is now 120s (raised from 75s for the same reason 75s was raised from
+  45s). This is documented as a **pragmatic mitigation, not a resolution** — the
+  buffer is a ceiling the wait exits from as soon as messages arrive, so widening
+  it costs nothing for the common (fast) case, but if `order.confirmed`'s failure
+  is a genuine delivery bug rather than slowness, no buffer size fixes it. If this
+  recurs again, the next step is to instrument `notification-service`'s own
+  consumption of the same message (does it receive `order.confirmed` promptly?)
+  to determine whether this is specific to the test's ephemeral consumer group or
+  a broader issue with that one message.
 - The `microservices` project's test suite now runs measurably slower in CI (~5-6
   minutes instead of ~2-3) because 62 tests execute one at a time instead of
   across parallel workers. This is treated as acceptable: correctness over speed
