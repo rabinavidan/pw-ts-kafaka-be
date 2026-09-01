@@ -48,7 +48,9 @@ export default defineConfig({
       name: 'microservices',
       testDir: './tests/microservices',
       // Targets each service directly on its own port — requires `npm run dev:services` to be running
-      timeout: 90_000,
+      // 140s to comfortably exceed KafkaHelper.consume()'s worst-case internal budget
+      // (20s caller timeout + 75s rebalance buffer = 95s) with margin to spare.
+      timeout: 140_000,
       retries: 2,   // retry on rebalancing-induced timeouts under parallel project load
       workers: 1,   // serialise — idempotency/DLQ/contract/tracing tests each spin up their
                      // own throwaway Kafka consumer group; running them in parallel triggers
