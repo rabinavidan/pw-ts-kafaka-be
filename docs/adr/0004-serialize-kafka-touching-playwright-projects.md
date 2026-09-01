@@ -47,20 +47,23 @@ ADR has — see Consequences.
   occasionally take longer than the original 45s buffer on a single, uncontended
   join — a different test drew the "slow join" outcome on different runs
   (`order.cancelled` before serializing, `order.confirmed` after).
-- **The buffer alone has not proven sufficient, twice.** Raising it to 75s held
-  for exactly two CI runs (the PR that introduced it, plus the next milestone's
-  PR) before recurring: a *docs-only* PR with zero code changes near Kafka
-  reproduced the identical `order.confirmed matches its contract` failure twice
-  in a row, including on a re-run. What makes this specific test notable isn't
-  just that it's slow sometimes — it's that across every CI run observed so far,
-  `order.confirmed` is the one that times out with **zero messages ever
-  collected**, while its structurally-identical sibling `order.cancelled` (same
-  publish shape, same two-messages-per-key pattern, running immediately after it
-  in the same file) consistently succeeds in under a second. That's a much
-  higher, more consistent failure rate for one specific test than "generic
-  broker slowness spread evenly across ~20 Kafka-consuming calls" would predict,
-  and comparing the two tests' producer code byte-for-byte turned up no
-  discriminating difference. The root cause remains **unconfirmed**.
+- **The buffer alone has not proven sufficient — but which test draws the
+  outcome varies, it isn't fixed to one.** Raising it to 75s held for exactly
+  two CI runs before recurring: a *docs-only* PR with zero code changes near
+  Kafka reproduced `order.confirmed matches its contract` timing out with
+  **zero messages ever collected**, twice in a row, while its
+  structurally-identical sibling `order.cancelled` succeeded in under a
+  second both times — comparing the two tests' producer code byte-for-byte
+  turned up no discriminating difference. At the time this read as
+  `order.confirmed` specifically being disproportionately affected. A later
+  run (after the 120s-buffer excursion below, back on 75s) corrected that
+  read: that time `order.created` — previously the *most* reliable test in
+  the file — failed all 3 attempts identically, while `order.confirmed`
+  passed in 319ms and `order.cancelled` recovered on its first retry. Taken
+  together, this is better evidence for "an occasional broker-side stall
+  that can land on whichever consumer-group join happens to be in flight,
+  with no consistent per-test cause" than for anything specific to
+  `order.confirmed`. The root cause remains **unconfirmed**.
 - While investigating this, a real bug was found and fixed: `KafkaHelper.consume()`
   called `consumer.disconnect()` immediately after the `waitUntil()` call that
   throws on timeout, so a timed-out consume() never disconnected its consumer —
@@ -91,15 +94,15 @@ ADR has — see Consequences.
   the problem goes away" to "keep it at the smallest value that's held up
   empirically" — 75s is that value today, not because it's provably correct,
   but because it's the one with a track record of *not* cascading.
-- The `order.confirmed`-specific pattern described above (zero messages
-  collected, sibling tests reliably fast) and this broader cascading-failure
-  mode may be the same underlying issue at different severities, or two
-  different issues — genuinely unclear without live broker access during a
-  failure. If this recurs again, the next step is to instrument
-  `notification-service`'s own consumption of the same message (does it
-  receive `order.confirmed` promptly, independent of the test's own ephemeral
-  consumer?) to determine whether this is specific to ephemeral test consumer
-  groups or a broader issue with message delivery for that one message.
+- The single-test "zero messages collected" pattern and the 120s-buffer
+  cascading-failure mode may be the same underlying issue at different
+  severities, or two different issues — genuinely unclear without live
+  broker access during a failure. If this recurs again, the next step is to
+  instrument `notification-service`'s own consumption of whichever message
+  is affected (does the real, persistent consumer receive it promptly,
+  independent of the test's own ephemeral consumer group?) to determine
+  whether this is specific to ephemeral test consumer groups or a broader
+  issue with message delivery for that one message.
 - The `microservices` project's test suite now runs measurably slower in CI (~5-6
   minutes instead of ~2-3) because 62 tests execute one at a time instead of
   across parallel workers. This is treated as acceptable: correctness over speed
