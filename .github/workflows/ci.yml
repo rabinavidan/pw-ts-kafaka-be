@@ -31,7 +31,26 @@ jobs:
       - run: npm run lint
       - run: npm run type-check
 
-  # ── 2. UI build ──────────────────────────────────────────────────
+  # ── 2. Kubernetes manifest lint ───────────────────────────────────
+  manifest-lint:
+    name: Manifest Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz \
+            | tar xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate k8s/*.yaml against upstream Kubernetes schemas
+        run: kubeconform -strict -summary -ignore-missing-schemas k8s/*.yaml
+
+      - name: Validate docker-compose.yml
+        run: docker compose -f docker-compose.yml config --quiet
+
+  # ── 3. UI build ──────────────────────────────────────────────────
   ui-build:
     name: UI Build
     runs-on: ubuntu-latest
@@ -53,7 +72,7 @@ jobs:
           path: ui/dist/
           retention-days: 7
 
-  # ── 3. Backend tests (API + Kafka + Integration) ─────────────────
+  # ── 4. Backend tests (API + Kafka + Integration) ─────────────────
   test-be:
     name: Backend Tests
     runs-on: ubuntu-latest
@@ -180,7 +199,7 @@ jobs:
           path: test-results/results.json
           retention-days: 30
 
-  # ── 4. Microservices stack (gateway + orders/payments/events/notifications) ──
+  # ── 5. Microservices stack (gateway + orders/payments/events/notifications) ──
   test-microservices:
     name: Microservices Tests
     runs-on: ubuntu-latest
@@ -329,7 +348,7 @@ jobs:
           path: /tmp/microservices.log
           retention-days: 7
 
-  # ── 5. DB layer tests (pure PostgreSQL — no API, no Kafka) ─────────
+  # ── 6. DB layer tests (pure PostgreSQL — no API, no Kafka) ─────────
   test-db:
     name: DB Layer Tests
     runs-on: ubuntu-latest
@@ -403,7 +422,7 @@ jobs:
           path: test-results/results.json
           retention-days: 30
 
-  # ── 6. E2E tests (UI — Orders & Payments) ────────────────────────
+  # ── 7. E2E tests (UI — Orders & Payments) ────────────────────────
   test-e2e:
     name: E2E Tests (UI)
     runs-on: ubuntu-latest
@@ -555,7 +574,7 @@ jobs:
           path: report-artifacts/ui-smoke-results.json
           retention-days: 30
 
-  # ── 7. Coverage — aggregate pass-rate across all test layers ─────
+  # ── 8. Coverage — aggregate pass-rate across all test layers ─────
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -595,7 +614,7 @@ jobs:
           path: badges/
           retention-days: 30
 
-  # ── 8. Deploy to GitHub Pages (main only) ────────────────────────
+  # ── 9. Deploy to GitHub Pages (main only) ────────────────────────
   deploy:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
