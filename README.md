@@ -30,6 +30,10 @@ with 239 tests across seven layers, a full CI/CD pipeline and Kubernetes deploy.
   microservices, DB, E2E) and an auto-published test report.
 - **Runs anywhere** — single-command local mode (mock server), full microservices
   mode, or Kubernetes (12 manifests included).
+- **Documented decisions, not just code** — [ADRs](docs/adr/) covering the trade-offs
+  behind the architecture, [sequence diagrams](docs/sequence-diagrams.md) for the
+  order saga and trace-id propagation, and [`AI.md`](AI.md) on how this repo has
+  actually been built and extended.
 
 ## Test layers
 
@@ -410,6 +414,11 @@ Opens the React dashboard at `http://localhost:5173` with the mock server on `ht
 │       ├── orders.e2e.spec.ts        # 24 tests: create, confirm/cancel, filters, bulk, Kafka events
 │       └── payments.e2e.spec.ts      # 27 tests: create, process/refund/fail, filters, bulk, Kafka events
 │
+├── docs/
+│   ├── adr/                           # Architecture Decision Records — one per design decision
+│   └── sequence-diagrams.md           # Mermaid: order saga, trace-id propagation, DLQ/idempotency
+├── AI.md                              # How this repo has actually been built and extended
+│
 └── .github/workflows/
     └── ci.yml                        # 9-job pipeline (see CI/CD section)
 ```
@@ -666,6 +675,17 @@ npm run clean
 **Structured JSON logs, not formatted strings.** Every service (gateway included) logs one JSON object per line — `{timestamp, level, source, message, ...context}` — instead of a human-formatted prefix with a trailing object dump. Machine-parseable by `jq`/log aggregators without a custom parser, and every log line already carries whatever context (method, path, table, trace id) the call site attached.
 
 **Tag-based execution.** `@smoke` and `@regression` tags let the pipeline choose the right depth for each stage without maintaining separate config files.
+
+---
+
+## Documentation
+
+The decisions above are the summary; the full reasoning — including alternatives
+that were considered and rejected — lives in [`docs/adr/`](docs/adr/) as one
+Architecture Decision Record per decision. [`docs/sequence-diagrams.md`](docs/sequence-diagrams.md)
+traces the order saga, trace-id propagation, and the dead-letter/idempotency path
+as Mermaid diagrams. [`AI.md`](AI.md) documents how this repository has actually
+been developed and extended, milestone by milestone.
 
 ---
 
