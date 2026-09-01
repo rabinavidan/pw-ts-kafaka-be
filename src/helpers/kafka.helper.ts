@@ -126,15 +126,20 @@ export class KafkaHelper {
         },
       });
 
-      // Add a 120s buffer on top of the caller's timeout to absorb consumer group join and
+      // Add a 75s buffer on top of the caller's timeout to absorb consumer group join and
       // partition assignment delays. These are usually 20-30s when multiple projects run
       // concurrently, but even fully serialized (one consumer group at a time) the CI broker's
-      // group-coordinator has been observed to occasionally exceed even a 75s buffer — see
-      // ADR-0004 for the full history, including the open question of why one specific test
-      // (order.confirmed in event-contracts.spec.ts) has drawn this outcome disproportionately
-      // often rather than it being spread evenly across every Kafka-consuming call.
+      // group-coordinator can occasionally take well past 45s on a single join.
+      // Reverted from a 120s buffer (2026-09-01): widening it further did not help and made
+      // things measurably worse — a run with the 120s buffer produced 4 cascading test
+      // failures with zero recoveries across 3 retries each (28 minutes total), versus this
+      // failure mode's prior history of at most 1 test failing per run at 75s. The working
+      // theory is that a longer buffer gives a stuck consumer more time to sit before its
+      // retry can land outside whatever transient bad window caused the stall, rather than
+      // failing fast and getting more attempts in the same wall-clock budget. See ADR-0004
+      // for the full history — root cause is still unconfirmed.
       // The wait exits as soon as messages arrive, so fast runs are unaffected.
-      await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs + 120000, 200);
+      await waitUntil(() => Promise.resolve(collected.length >= count), timeoutMs + 75000, 200);
     } finally {
       // Must run even when waitUntil throws on timeout — otherwise a timed-out consumer is
       // never disconnected, leaving it (and its heartbeat timers) as a live group member for
